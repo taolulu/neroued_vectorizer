@@ -18,7 +18,7 @@ find_package(OpenCV 4.5 REQUIRED COMPONENTS core imgproc imgcodecs)
 include(FetchContent)
 
 # spdlog
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/spdlog/CMakeLists.txt")
+if(NOT TARGET spdlog::spdlog_header_only AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/spdlog/CMakeLists.txt")
     add_subdirectory(3rdparty/spdlog EXCLUDE_FROM_ALL)
 elseif(NOT TARGET spdlog::spdlog_header_only)
     find_package(spdlog QUIET)
@@ -35,7 +35,7 @@ elseif(NOT TARGET spdlog::spdlog_header_only)
 endif()
 
 # Clipper2
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/clipper2/CPP/CMakeLists.txt")
+if(NOT TARGET Clipper2 AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/clipper2/CPP/CMakeLists.txt")
     set(CLIPPER2_UTILS OFF CACHE BOOL "" FORCE)
     set(CLIPPER2_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(CLIPPER2_TESTS OFF CACHE BOOL "" FORCE)
