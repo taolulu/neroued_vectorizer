@@ -1,9 +1,28 @@
 cmake_minimum_required(VERSION 3.16)
-project(neroued_vectorizer VERSION 0.1.0 LANGUAGES CXX)
+
+# ── Version from git tag ─────────────────────────────────────────────────────
+find_package(Git QUIET)
+if(GIT_FOUND)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} describe --tags --match "v*" --abbrev=0
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        OUTPUT_VARIABLE GIT_TAG OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+    if(GIT_TAG)
+        string(REGEX REPLACE "^v" "" NV_VERSION "${GIT_TAG}")
+        string(REGEX REPLACE "[^0-9.].*" "" NV_VERSION "${NV_VERSION}")
+    endif()
+endif()
+if(NOT NV_VERSION)
+    set(NV_VERSION "0.0.0")
+endif()
+
+project(neroued_vectorizer VERSION ${NV_VERSION} LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(GNUInstallDirs)
 
@@ -11,6 +30,7 @@ include(GNUInstallDirs)
 option(NV_BUILD_EVAL "Build the vectorize evaluation library" ON)
 option(NV_BUILD_APPS "Build CLI applications" ON)
 option(NV_BUILD_TESTS "Build unit tests" ON)
+option(NV_BUILD_PYTHON "Build Python bindings (requires pybind11)" OFF)
 
 # ── Dependencies ─────────────────────────────────────────────────────────────
 find_package(OpenCV 4.5 REQUIRED COMPONENTS core imgproc imgcodecs)
@@ -67,11 +87,11 @@ elseif(NOT TARGET Clipper2)
     endif()
 endif()
 
-# Potrace
+# Potrace — pass -DPOTRACE_ROOT=<prefix> on Windows; Linux/macOS use system paths
 find_library(POTRACE_LIBRARY potrace
-    HINTS $ENV{POTRACE_ROOT} $ENV{POTRACE_ROOT}/lib)
+    HINTS ${POTRACE_ROOT}/lib ${POTRACE_ROOT})
 find_path(POTRACE_INCLUDE_DIR potracelib.h
-    HINTS $ENV{POTRACE_ROOT} $ENV{POTRACE_ROOT}/include)
+    HINTS ${POTRACE_ROOT}/include ${POTRACE_ROOT})
 if(NOT POTRACE_LIBRARY OR NOT POTRACE_INCLUDE_DIR)
     message(FATAL_ERROR
         "Potrace is required but was not found.\n"
@@ -170,6 +190,16 @@ endif()
 if(NV_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
+endif()
+
+# ── Python bindings ───────────────────────────────────────────────────────────
+if(NV_BUILD_PYTHON)
+    set(PYBIND11_FINDPYTHON ON)
+    find_package(pybind11 CONFIG REQUIRED)
+    pybind11_add_module(_core python/bindings.cpp)
+    target_link_libraries(_core PRIVATE neroued_vectorizer)
+    target_include_directories(_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    install(TARGETS _core DESTINATION neroued_vectorizer)
 endif()
 
 # ── Install ──────────────────────────────────────────────────────────────────
