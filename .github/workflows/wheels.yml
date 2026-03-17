@@ -89,7 +89,7 @@ jobs:
     if: >-
       github.event_name == 'push'
       && startsWith(github.ref, 'refs/tags/v')
-      && (contains(github.ref, 'rc') || contains(github.ref, 'a') || contains(github.ref, 'b'))
+      && (contains(github.ref_name, 'rc') || contains(github.ref_name, 'a') || contains(github.ref_name, 'b'))
     environment:
       name: testpypi
       url: https://test.pypi.org/p/neroued-vectorizer
@@ -116,9 +116,9 @@ jobs:
     if: >-
       github.event_name == 'push'
       && startsWith(github.ref, 'refs/tags/v')
-      && !contains(github.ref, 'rc')
-      && !contains(github.ref, 'a')
-      && !contains(github.ref, 'b')
+      && !contains(github.ref_name, 'rc')
+      && !contains(github.ref_name, 'a')
+      && !contains(github.ref_name, 'b')
     environment:
       name: pypi
       url: https://pypi.org/p/neroued-vectorizer
