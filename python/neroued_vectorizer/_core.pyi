@@ -32,6 +32,14 @@ class Rgb:
     def __eq__(self, other: object) -> bool: ...
     def __repr__(self) -> str: ...
 
+class PipelineMode:
+    """Pipeline implementation selector."""
+
+    V1: PipelineMode
+    """Original boundary-graph + cutout pipeline."""
+    V2: PipelineMode
+    """Stacking model: per-layer Potrace with depth ordering."""
+
 class VectorizerConfig:
     """Configuration for the vectorization pipeline.
 
@@ -43,6 +51,10 @@ class VectorizerConfig:
         cfg.smoothness = 0.7
         result = vectorize("image.png", cfg)
     """
+
+    # ── Pipeline mode ─────────────────────────────────────────────────────
+    pipeline_mode: PipelineMode
+    """Pipeline implementation: PipelineMode.V1 (default) or PipelineMode.V2."""
 
     # ── Color segmentation ───────────────────────────────────────────────
     num_colors: int
@@ -119,6 +131,8 @@ class VectorizerConfig:
     """Patch uncovered pixels after vectorization."""
     min_coverage_ratio: float
     """Minimum coverage ratio before patching kicks in."""
+    enable_depth_validation: bool
+    """V2 only: run depth order validation (diagnostic)."""
 
     def __init__(self) -> None:
         """Create a config with default values."""

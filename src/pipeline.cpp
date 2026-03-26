@@ -20,12 +20,14 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
-
-#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <stdexcept>
 #include <vector>
+
+#ifdef _OPENMP
+#    include <omp.h>
+#endif
 
 namespace neroued::vectorizer::detail {
 
@@ -48,13 +50,14 @@ VectorizerResult RunPipeline(const cv::Mat& bgr, const VectorizerConfig& cfg,
         adaptive_smoothing_color    = std::min(cfg.smoothing_color, 15.0f);
         adaptive_min_region         = std::max(cfg.min_region_area, short_edge * short_edge / 50);
         adaptive_upscale_short_edge = std::min(cfg.upscale_short_edge, 400);
-        spdlog::info("Small image adaptation: short_edge={}, colors={}, smoothing=({:.0f},{:.0f}), "
-                     "min_region={}, upscale_target={}",
-                     short_edge, resolved_colors, adaptive_smoothing_spatial,
-                     adaptive_smoothing_color, adaptive_min_region, adaptive_upscale_short_edge);
+        spdlog::info(
+            "V1: small image adaptation: short_edge={}, colors={}, smoothing=({:.0f},{:.0f}), "
+            "min_region={}, upscale_target={}",
+            short_edge, resolved_colors, adaptive_smoothing_spatial, adaptive_smoothing_color,
+            adaptive_min_region, adaptive_upscale_short_edge);
     }
 
-    spdlog::info("RunPipeline start: input={}x{}, num_colors={}{}, "
+    spdlog::info("V1: start: input={}x{}, num_colors={}{}, "
                  "min_region_area={}, curve_fit_error={:.2f}, contour_simplify={:.2f}, "
                  "svg_stroke={}, coverage_fix={}, max_working_pixels={}",
                  bgr.cols, bgr.rows, resolved_colors, cfg.num_colors == 0 ? " (auto)" : "",
@@ -73,13 +76,13 @@ VectorizerResult RunPipeline(const cv::Mat& bgr, const VectorizerConfig& cfg,
     if (scaled && !opaque_mask.empty()) {
         cv::resize(opaque_mask, working_mask, working.size(), 0, 0, cv::INTER_NEAREST);
     }
-    spdlog::debug("Vectorize preprocess done: working={}x{}, scale={:.3f}, mask_present={}",
-                  working.cols, working.rows, scale, !working_mask.empty());
+    spdlog::debug("V1: preprocess done: working={}x{}, scale={:.3f}, mask_present={}", working.cols,
+                  working.rows, scale, !working_mask.empty());
 
     cv::Mat edge_map;
     if (multicolor && !unsmoothed.empty()) {
         edge_map = ComputeEdgeMap(unsmoothed);
-        spdlog::debug("Vectorize edge map computed: size={}x{}", edge_map.cols, edge_map.rows);
+        spdlog::debug("V1: edge map computed: size={}x{}", edge_map.cols, edge_map.rows);
     }
 
     cv::Mat lab = BgrToLab(working);
@@ -88,17 +91,17 @@ VectorizerResult RunPipeline(const cv::Mat& bgr, const VectorizerConfig& cfg,
                                        cfg.slic_compactness, edge_map, cfg.edge_sensitivity)
                    : SegmentBinary(working, lab);
     if (seg.labels.empty()) {
-        spdlog::error("Vectorize segmentation failed: empty labels");
+        spdlog::error("V1: segmentation failed: empty labels");
         throw std::runtime_error("RunPipeline: segmentation failed");
     }
-    spdlog::info("Vectorize segmentation completed: mode={}, centers={}, label_map={}x{}",
+    spdlog::info("V1: segmentation completed: mode={}, centers={}, label_map={}x{}",
                  multicolor ? "multicolor" : "binary", seg.centers_lab.size(), seg.labels.cols,
                  seg.labels.rows);
 
     if (!working_mask.empty()) {
         if (working_mask.type() != CV_8UC1 || working_mask.size() != seg.labels.size()) {
             spdlog::error(
-                "Vectorize mask invalid: expected type=CV_8UC1 size={}x{}, got type={} size={}x{}",
+                "V1: mask invalid: expected type=CV_8UC1 size={}x{}, got type={} size={}x{}",
                 seg.labels.cols, seg.labels.rows, working_mask.type(), working_mask.cols,
                 working_mask.rows);
             throw std::runtime_error("RunPipeline: invalid opaque mask");
@@ -107,7 +110,7 @@ VectorizerResult RunPipeline(const cv::Mat& bgr, const VectorizerConfig& cfg,
         cv::compare(working_mask, 0, transparent, cv::CMP_EQ);
         const int transparent_px = cv::countNonZero(transparent);
         seg.labels.setTo(cv::Scalar(-1), transparent);
-        spdlog::debug("Vectorize transparent mask applied: transparent_pixels={}", transparent_px);
+        spdlog::debug("V1: transparent mask applied: transparent_pixels={}", transparent_px);
     }
 
     cv::Mat unsmoothed_lab;
@@ -116,13 +119,13 @@ VectorizerResult RunPipeline(const cv::Mat& bgr, const VectorizerConfig& cfg,
     if (multicolor && cfg.refine_passes > 0 && !unsmoothed_lab.empty() &&
         !seg.centers_lab.empty()) {
         RefineLabelsBoundary(seg.labels, unsmoothed_lab, seg.centers_lab, cfg.refine_passes);
-        spdlog::info("Vectorize label refinement applied: passes={}", cfg.refine_passes);
+        spdlog::info("V1: label refinement applied: passes={}", cfg.refine_passes);
     }
 
     int area_proportional_min =
         std::min(200, static_cast<int>(working.rows * working.cols * 0.0005f));
     int effective_min_region = std::max(adaptive_min_region, area_proportional_min);
-    spdlog::debug("MergeSmallComponents min_region: cfg={}, adaptive={}, proportional={}, "
+    spdlog::debug("V1: MergeSmallComponents min_region: cfg={}, adaptive={}, proportional={}, "
                   "effective={}",
                   cfg.min_region_area, adaptive_min_region, area_proportional_min,
                   effective_min_region);
@@ -133,8 +136,30 @@ VectorizerResult RunPipeline(const cv::Mat& bgr, const VectorizerConfig& cfg,
     }
     int num_labels = CompactLabels(seg.labels, seg.centers_lab);
     auto palette   = ComputePalette(working, seg.labels, num_labels);
-    spdlog::info("Vectorize labels compacted: num_labels={}, palette_size={}", num_labels,
+    spdlog::info("V1: labels compacted: num_labels={}, palette_size={}", num_labels,
                  palette.size());
+
+    struct LabelMask {
+        cv::Mat mask;
+        int pixel_count = 0;
+    };
+
+    std::vector<LabelMask> label_masks(num_labels);
+    {
+        for (int rid = 0; rid < num_labels; ++rid) {
+            label_masks[rid].mask = cv::Mat::zeros(seg.labels.size(), CV_8UC1);
+        }
+        for (int r = 0; r < seg.labels.rows; ++r) {
+            const int* lrow = seg.labels.ptr<int>(r);
+            for (int c = 0; c < seg.labels.cols; ++c) {
+                int lid = lrow[c];
+                if (lid >= 0 && lid < num_labels) {
+                    label_masks[lid].mask.at<uint8_t>(r, c) = 255;
+                    label_masks[lid].pixel_count++;
+                }
+            }
+        }
+    }
 
     float effective_curve_fit_error  = cfg.curve_fit_error;
     float effective_contour_simplify = cfg.contour_simplify;
@@ -145,24 +170,24 @@ VectorizerResult RunPipeline(const cv::Mat& bgr, const VectorizerConfig& cfg,
             effective_curve_fit_error = 2.0f - 1.7f * dl;
         if (cfg.contour_simplify == kDefaults.contour_simplify)
             effective_contour_simplify = 0.8f - 0.6f * dl;
-        spdlog::info("detail_level={:.2f}: derived curve_fit_error={:.2f}, "
+        spdlog::info("V1: detail_level={:.2f}: derived curve_fit_error={:.2f}, "
                      "contour_simplify={:.2f}",
                      dl, effective_curve_fit_error, effective_contour_simplify);
     }
 
-    const float trace_eps =
-        std::max(0.2f, std::clamp(effective_contour_simplify * 0.45f + 0.2f, 0.2f, 2.0f));
-    const int turdsize        = std::max(0, static_cast<int>(std::lround(trace_eps * 0.5f)));
-    const double opttolerance = std::clamp(static_cast<double>(trace_eps), 0.2, 2.0);
-    spdlog::debug("Vectorize trace params: trace_eps={:.3f}, turdsize={}, opttolerance={:.3f}",
-                  trace_eps, turdsize, opttolerance);
+    auto tp                   = DeriveTraceParams(effective_contour_simplify);
+    const float trace_eps     = tp.trace_eps;
+    const int turdsize        = tp.turdsize;
+    const double opttolerance = tp.opttolerance;
+    spdlog::debug("V1: trace params: trace_eps={:.3f}, turdsize={}, opttolerance={:.3f}", trace_eps,
+                  turdsize, opttolerance);
 
     std::vector<VectorizedShape> shapes;
 
     if (multicolor && num_labels > 2) {
-        spdlog::info("Vectorize contour mode: BoundaryGraph+CurveFit");
+        spdlog::info("V1: contour mode: BoundaryGraph+CurveFit");
         auto boundary_graph = BuildBoundaryGraph(seg.labels);
-        spdlog::debug("BoundaryGraph built: nodes={}, edges={}", boundary_graph.nodes.size(),
+        spdlog::debug("V1: BoundaryGraph built: nodes={}, edges={}", boundary_graph.nodes.size(),
                       boundary_graph.edges.size());
 
         if (cfg.enable_subpixel_refine) {
@@ -189,7 +214,7 @@ VectorizerResult RunPipeline(const cv::Mat& bgr, const VectorizerConfig& cfg,
         shapes = AssembleContoursFromGraph(boundary_graph, num_labels, palette,
                                            cfg.min_contour_area, cfg.min_hole_area, &fit_cfg,
                                            smooth_cfg, cfg.merge_segment_tolerance);
-        spdlog::info("BoundaryGraph contour assembly done: shapes={}", shapes.size());
+        spdlog::info("V1: BoundaryGraph contour assembly done: shapes={}", shapes.size());
 
         std::vector<double> label_pixel_count(num_labels, 0.0);
         std::vector<double> label_shape_area(num_labels, 0.0);
@@ -226,18 +251,16 @@ VectorizerResult RunPipeline(const cv::Mat& bgr, const VectorizerConfig& cfg,
             if (!label_covered[rid]) ++uncovered_labels;
         }
         if (uncovered_labels > 0) {
-            spdlog::warn(
-                "Vectorize fallback triggered: uncovered_labels={} (BoundaryGraph -> Potrace)",
-                uncovered_labels);
+            spdlog::warn("V1: fallback triggered: uncovered_labels={} (BoundaryGraph -> Potrace)",
+                         uncovered_labels);
         }
         int fallback_labels     = 0;
         int fallback_shapes_add = 0;
         for (int rid = 0; rid < num_labels; ++rid) {
             if (label_covered[rid]) continue;
             ++fallback_labels;
-            cv::Mat mask = (seg.labels == rid);
-            mask.convertTo(mask, CV_8UC1, 255);
-            if (cv::countNonZero(mask) <= 0) continue;
+            const cv::Mat& mask = label_masks[rid].mask;
+            if (label_masks[rid].pixel_count <= 0) continue;
 
             auto traced = TraceMaskWithPotraceBezier(mask, turdsize, opttolerance);
             for (auto& g : traced) {
@@ -249,6 +272,7 @@ VectorizerResult RunPipeline(const cv::Mat& bgr, const VectorizerConfig& cfg,
                 for (auto& hole : g.holes) {
                     double hole_area = std::abs(BezierContourSignedArea(hole));
                     if (hole_area < static_cast<double>(cfg.min_hole_area)) continue;
+                    hole.is_hole = true;
                     shape.contours.push_back(std::move(hole));
                 }
                 if (!shape.contours.empty()) {
@@ -258,18 +282,20 @@ VectorizerResult RunPipeline(const cv::Mat& bgr, const VectorizerConfig& cfg,
             }
         }
         if (fallback_labels > 0) {
-            spdlog::info("Vectorize fallback completed: labels={}, shapes_added={}",
-                         fallback_labels, fallback_shapes_add);
+            spdlog::info("V1: fallback completed: labels={}, shapes_added={}", fallback_labels,
+                         fallback_shapes_add);
         }
     } else {
-        spdlog::info("Vectorize contour mode: per-label Potrace");
+        spdlog::info("V1: contour mode: per-label Potrace");
         int labels_traced       = 0;
         int dilate_retry_count  = 0;
         int direct_shapes_added = 0;
+        std::vector<std::vector<VectorizedShape>> per_label_shapes(num_labels);
+
+#pragma omp parallel for schedule(dynamic) reduction(+ : labels_traced, dilate_retry_count)
         for (int rid = 0; rid < num_labels; ++rid) {
-            cv::Mat mask = (seg.labels == rid);
-            mask.convertTo(mask, CV_8UC1, 255);
-            int px = cv::countNonZero(mask);
+            const cv::Mat& mask = label_masks[rid].mask;
+            int px              = label_masks[rid].pixel_count;
             if (px <= 0) continue;
             ++labels_traced;
 
@@ -292,20 +318,23 @@ VectorizerResult RunPipeline(const cv::Mat& bgr, const VectorizerConfig& cfg,
                 for (auto& hole : g.holes) {
                     double hole_area = std::abs(BezierContourSignedArea(hole));
                     if (hole_area < static_cast<double>(cfg.min_hole_area)) continue;
+                    hole.is_hole = true;
                     shape.contours.push_back(std::move(hole));
                 }
-                if (!shape.contours.empty()) {
-                    shapes.push_back(std::move(shape));
-                    ++direct_shapes_added;
-                }
+                if (!shape.contours.empty()) { per_label_shapes[rid].push_back(std::move(shape)); }
+            }
+        }
+        for (int rid = 0; rid < num_labels; ++rid) {
+            for (auto& s : per_label_shapes[rid]) {
+                shapes.push_back(std::move(s));
+                ++direct_shapes_added;
             }
         }
         if (dilate_retry_count > 0) {
-            spdlog::warn("Vectorize Potrace retry with dilation: labels_retried={}",
-                         dilate_retry_count);
+            spdlog::warn("V1: Potrace retry with dilation: labels_retried={}", dilate_retry_count);
         }
-        spdlog::info("Vectorize per-label Potrace done: labels_traced={}, shapes_added={}",
-                     labels_traced, direct_shapes_added);
+        spdlog::info("V1: per-label Potrace done: labels_traced={}, shapes_added={}", labels_traced,
+                     direct_shapes_added);
     }
 
     if (cfg.svg_enable_stroke && multicolor && num_labels > 1) {
@@ -320,9 +349,8 @@ VectorizerResult RunPipeline(const cv::Mat& bgr, const VectorizerConfig& cfg,
         int labels_with_thin = 0;
         int stroke_added     = 0;
         for (int rid = 0; rid < num_labels && stroke_added < max_stroke_count; ++rid) {
-            cv::Mat mask = (seg.labels == rid);
-            mask.convertTo(mask, CV_8UC1, 255);
-            if (cv::countNonZero(mask) <= 0) continue;
+            const cv::Mat& mask = label_masks[rid].mask;
+            if (label_masks[rid].pixel_count <= 0) continue;
 
             cv::Mat thin = DetectThinRegion(mask, adaptive_thin_radius);
             if (cv::countNonZero(thin) < 3) continue;
@@ -340,11 +368,11 @@ VectorizerResult RunPipeline(const cv::Mat& bgr, const VectorizerConfig& cfg,
                 ++stroke_added;
             }
         }
-        spdlog::info("Vectorize thin-line enhancement: labels={}, strokes_added={} (cap={})",
+        spdlog::info("V1: thin-line enhancement: labels={}, strokes_added={} (cap={})",
                      labels_with_thin, stroke_added, max_stroke_count);
     } else if (cfg.svg_enable_stroke) {
-        spdlog::debug("Vectorize thin-line enhancement skipped: multicolor={}, num_labels={}",
-                      multicolor, num_labels);
+        spdlog::debug("V1: thin-line enhancement skipped: multicolor={}, num_labels={}", multicolor,
+                      num_labels);
     }
 
     std::sort(shapes.begin(), shapes.end(), [](const auto& a, const auto& b) {
@@ -363,36 +391,14 @@ VectorizerResult RunPipeline(const cv::Mat& bgr, const VectorizerConfig& cfg,
         ApplyCoverageGuard(shapes, seg.labels, palette, effective_coverage_ratio, trace_eps,
                            std::max(1.0f, cfg.min_contour_area * 0.5f));
         const auto added = shapes.size() >= before ? (shapes.size() - before) : 0;
-        spdlog::info("Vectorize coverage guard applied: added_shapes={}", added);
+        spdlog::info("V1: coverage guard applied: added_shapes={}", added);
     }
 
     if (scaled) {
-        const float inv = 1.0f / scale;
-        for (auto& shape : shapes) {
-            for (auto& contour : shape.contours) {
-                for (auto& s : contour.segments) {
-                    s.p0 = s.p0 * inv;
-                    s.p1 = s.p1 * inv;
-                    s.p2 = s.p2 * inv;
-                    s.p3 = s.p3 * inv;
-                }
-            }
-        }
-        spdlog::debug("Vectorize output rescaled by inverse factor={:.4f}", inv);
+        RescaleShapes(shapes, 1.0f / scale);
+        spdlog::debug("V1: output rescaled by inverse factor={:.4f}", 1.0f / scale);
     }
-
-    const float fw = static_cast<float>(bgr.cols);
-    const float fh = static_cast<float>(bgr.rows);
-    for (auto& shape : shapes) {
-        for (auto& contour : shape.contours) {
-            for (auto& s : contour.segments) {
-                s.p0 = {std::clamp(s.p0.x, 0.f, fw), std::clamp(s.p0.y, 0.f, fh)};
-                s.p1 = {std::clamp(s.p1.x, 0.f, fw), std::clamp(s.p1.y, 0.f, fh)};
-                s.p2 = {std::clamp(s.p2.x, 0.f, fw), std::clamp(s.p2.y, 0.f, fh)};
-                s.p3 = {std::clamp(s.p3.x, 0.f, fw), std::clamp(s.p3.y, 0.f, fh)};
-            }
-        }
-    }
+    ClampShapesToBounds(shapes, static_cast<float>(bgr.cols), static_cast<float>(bgr.rows), true);
 
     VectorizerResult result;
     result.width               = bgr.cols;
@@ -405,7 +411,7 @@ VectorizerResult RunPipeline(const cv::Mat& bgr, const VectorizerConfig& cfg,
     const auto elapsed_ms =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - pipeline_start)
             .count();
-    spdlog::info("RunPipeline completed: elapsed_ms={:.2f}, width={}, height={}, "
+    spdlog::info("V1: completed: elapsed_ms={:.2f}, width={}, height={}, "
                  "num_shapes={}, palette_size={}, svg_bytes={}",
                  elapsed_ms, result.width, result.height, result.num_shapes, result.palette.size(),
                  result.svg_content.size());
