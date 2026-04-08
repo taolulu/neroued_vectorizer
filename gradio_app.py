@@ -16,144 +16,6 @@ import neroued_vectorizer as nv
 
 SVG_PREVIEW_JS = """
 <script>
-// ── Pan & Zoom state ──────────────────────────────────────────────────────
-window._svgPan = { dragging: false, lastX: 0, lastY: 0 };
-
-function _initSvgInteraction() {
-    var outer = document.getElementById('svg-preview-outer');
-    if (!outer) return;
-    // Remove old listeners by cloning
-    var newOuter = outer.cloneNode(true);
-    outer.parentNode.replaceChild(newOuter, outer);
-
-    newOuter.addEventListener('wheel', function(e) {
-        e.preventDefault();
-        var inner = document.getElementById('svg-preview-inner');
-        if (!inner) return;
-        var cur = inner.style.transform.match(/scale\\(([\\d.]+)\\)/);
-        var level = cur ? parseFloat(cur[1]) : 1;
-        var delta = e.deltaY < 0 ? 0.1 : -0.1;
-        level = Math.max(0.1, Math.min(20, level + delta));
-        inner.style.transform = 'scale(' + level + ')';
-        inner.style.transformOrigin = (e.clientX - newOuter.getBoundingClientRect().left) + 'px ' + (e.clientY - newOuter.getBoundingClientRect().top) + 'px';
-    }, { passive: false });
-
-    newOuter.addEventListener('mousedown', function(e) {
-        if (e.button !== 0) return;
-        window._svgPan.dragging = true;
-        window._svgPan.lastX = e.clientX;
-        window._svgPan.lastY = e.clientY;
-        newOuter.style.cursor = 'grabbing';
-    });
-
-    document.addEventListener('mousemove', function(e) {
-        if (!window._svgPan.dragging) return;
-        var inner = document.getElementById('svg-preview-inner');
-        if (!inner) return;
-        var dx = e.clientX - window._svgPan.lastX;
-        var dy = e.clientY - window._svgPan.lastY;
-        window._svgPan.lastX = e.clientX;
-        window._svgPan.lastY = e.clientY;
-        var cur = inner.style.transform.match(/translate\\(([\\d.-]+)px, ([\\d.-]+)px\\)\\s+scale\\(([\\d.]+)\\)/);
-        var tx = 0, ty = 0, scale = 1;
-        if (cur) { tx = parseFloat(cur[1]); ty = parseFloat(cur[2]); scale = parseFloat(cur[3]); }
-        tx += dx; ty += dy;
-        inner.style.transform = 'translate(' + tx + 'px, ' + ty + 'px) scale(' + scale + ')';
-        inner.style.transformOrigin = 'center center';
-    });
-
-    document.addEventListener('mouseup', function() {
-        if (!window._svgPan.dragging) return;
-        window._svgPan.dragging = false;
-        var outer2 = document.getElementById('svg-preview-outer');
-        if (outer2) outer2.style.cursor = '';
-    });
-}
-
-// ── Pan & Zoom ─────────────────────────────────────────────────────────────
-function setSvgZoom(level) {
-    var inner = document.getElementById('svg-preview-inner');
-    if (inner) {
-        var m = inner.style.transform.match(/translate\\(([\\d.-]+)px, ([\\d.-]+)px\\)/);
-        var tx = m ? m[1] : '0';
-        var ty = m ? m[2] : '0';
-        inner.style.transform = 'translate(' + tx + 'px, ' + ty + 'px) scale(' + level + ')';
-        inner.style.transformOrigin = 'center center';
-    }
-}
-
-function setSvgBg(bg) {
-    var outer = document.getElementById('svg-preview-outer');
-    if (!outer) return;
-    switch(bg) {
-        case 'transparent':
-            outer.style.background = 'repeating-conic-gradient(#e0e0e0 0% 25%, #fff 0% 50%) 50%/16px 16px';
-            break;
-        case 'white':
-            outer.style.background = '#ffffff';
-            break;
-        case 'black':
-            outer.style.background = '#111111';
-            break;
-        case 'checker':
-        default:
-            outer.style.background = 'repeating-conic-gradient(#ccc 0% 25%, #fff 0% 50%) 50%/16px 16px';
-    }
-}
-
-function fitSvgToContainer() {
-    var outer = document.getElementById('svg-preview-outer');
-    var inner = document.getElementById('svg-preview-inner');
-    if (!outer || !inner) return;
-    var svg = inner.querySelector('svg');
-    if (!svg) return;
-    var vb = svg.getAttribute('viewBox');
-    if (vb) {
-        var parts = vb.split(' ').map(Number);
-        var w = parts[2], h = parts[3];
-    } else {
-        var w = parseFloat(svg.getAttribute('width')) || inner.offsetWidth;
-        var h = parseFloat(svg.getAttribute('height')) || inner.offsetHeight;
-    }
-    var scaleX = (outer.offsetWidth - 16) / w;
-    var scaleY = (outer.offsetHeight - 16) / h;
-    var scale = Math.min(scaleX, scaleY, 2);
-    inner.style.transform = 'translate(0px,0px) scale(' + scale + ')';
-    inner.style.transformOrigin = 'center center';
-}
-
-function actualSvgSize() {
-    var inner = document.getElementById('svg-preview-inner');
-    if (inner) {
-        inner.style.transform = 'translate(0px,0px) scale(1)';
-        inner.style.transformOrigin = 'center center';
-    }
-}
-
-function zoomSvg(delta) {
-    var inner = document.getElementById('svg-preview-inner');
-    if (!inner) return;
-    var cur = inner.style.transform.match(/scale\\(([\\d.]+)\\)/);
-    var level = cur ? parseFloat(cur[1]) : 1;
-    level = Math.max(0.1, Math.min(20, level + delta));
-    var m = inner.style.transform.match(/translate\\(([\\d.-]+)px, ([\\d.-]+)px\\)/);
-    var tx = m ? m[1] : '0';
-    var ty = m ? m[2] : '0';
-    inner.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + level + ')';
-    inner.style.transformOrigin = 'center center';
-}
-
-// ── Fullscreen ─────────────────────────────────────────────────────────────
-function fullscreenPreview() {
-    var outer = document.getElementById('svg-preview-outer');
-    if (!outer) return;
-    if (!document.fullscreenElement) {
-        outer.requestFullscreen().catch(function(e){ console.error(e); });
-    } else {
-        document.exitFullscreen();
-    }
-}
-
 // ── Highlight paths in SVG by fill color ───────────────────────────────────
 function highlightSvgColor(hexColor, active) {
     var inner = document.getElementById('svg-preview-inner');
@@ -184,17 +46,6 @@ function resetSvgHighlight() {
         p.style.filter = '';
         p.style.strokeWidth = '';
     });
-}
-
-// ── Re-init interaction after SVG updates ──────────────────────────────────
-window._svgInitDone = false;
-function scheduleSvgInit() {
-    if (window._svgInitDone) return;
-    window._svgInitDone = true;
-    setTimeout(function() {
-        _initSvgInteraction();
-        window._svgInitDone = false;
-    }, 100);
 }
 </script>
 """
@@ -260,7 +111,7 @@ def build_enhanced_palette_html(
     svg_content: str,
     palette: list,
 ) -> str:
-    """Build interactive palette HTML with usage % and highlighting."""
+    """Build interactive palette HTML with usage %."""
     stats = parse_svg_color_stats(svg_content)
     swatches = []
     for i, color in enumerate(palette):
@@ -273,7 +124,6 @@ def build_enhanced_palette_html(
         swatches.append(
             f'<div class="palette-swatch" '
             f'data-color="{hex_color}" '
-            f'onclick="window._togglePaletteHighlight(this, \'{hex_color}\')" '
             f'style="display:inline-flex;flex-direction:column;align-items:center;'
             f'margin:4px;cursor:pointer;" '
             f'title="{hex_color} — {stat["count"]} shapes ({stat["pct"]}%)">'
@@ -292,8 +142,6 @@ def build_enhanced_palette_html(
         f'<div id="palette-container" style="display:flex;flex-wrap:wrap;gap:2px;padding:4px 0;">'
         + ''.join(swatches)
         + '</div>'
-        + f'<div style="margin-top:8px;font-size:12px;color:#888;">'
-        f'点击色块以高亮显示 SVG 中对应的区域</div>'
     )
 
 
@@ -377,32 +225,6 @@ DESCRIPTION = (
     "高质量栅格转 SVG 矢量化工具。上传图片、调整下方的参数，点击 **矢量化** 即可生成 SVG。"
 )
 
-SVG_PLACEHOLDER = (
-    '<div id="svg-preview-outer" style="width:100%;height:460px;display:flex;'
-    'align-items:center;justify-content:center;border:1px dashed #ccc;'
-    'background:#ffffff;box-sizing:border-box;overflow:auto;cursor:default;">'
-    '<div id="svg-preview-inner" style="color:#aaa;font-size:14px;text-align:center;padding:20px;">'
-    '矢量化完成后，SVG 预览将在此处显示'
-    '</div></div>'
-)
-
-SVG_LOADING = (
-    '<div id="svg-preview-outer" style="width:100%;height:460px;display:flex;'
-    'align-items:center;justify-content:center;'
-    'background:#ffffff;box-sizing:border-box;overflow:hidden;position:relative;">'
-    '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;">'
-    '<div style="text-align:center;">'
-    '<svg width="48" height="48" viewBox="0 0 48 48" style="animation:spin 1.5s linear infinite;">'
-    '<circle cx="24" cy="24" r="20" fill="none" stroke="#e0e0e0" stroke-width="4"/>'
-    '<path d="M24 4 A20 20 0 0 1 44 24" fill="none" stroke="#6366f1" stroke-width="4" stroke-linecap="round"/>'
-    '</svg>'
-    '<div style="margin-top:12px;color:#6366f1;font-size:14px;font-weight:500;">正在矢量化...</div>'
-    '<div style="margin-top:4px;color:#aaa;font-size:12px;">请稍候</div>'
-    '</div></div>'
-    '<style>@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}</style>'
-    '</div>'
-)
-
 PALETTE_PLACEHOLDER = (
     '<div style="color:#aaa;font-size:14px;">调色板将在此处显示</div>'
 )
@@ -416,32 +238,6 @@ PRESETS = {
     "Illustration": (16, 10, 1.0, 60.0, 0.5, 12.0, 12.0, 0, 6000000, True),
     "Line Art": (4, 5, 0.5, 120.0, 0.8, 5.0, 5.0, 0, 2000000, False),
 }
-
-# Toggle highlight JS (injected in head)
-TOGGLE_HIGHLIGHT_JS = """
-<script>
-window._activePaletteColor = null;
-window._togglePaletteHighlight = function(el, hexColor) {
-    // If clicking same color, deactivate
-    if (window._activePaletteColor === hexColor) {
-        parent.highlightSvgColor(hexColor, false);
-        el.querySelector('div').style.borderColor = 'transparent';
-        window._activePaletteColor = null;
-    } else {
-        // Deactivate previous
-        if (window._activePaletteColor) {
-            parent.highlightSvgColor(window._activePaletteColor, false);
-            var prev = document.querySelector('[data-color="' + window._activePaletteColor + '"]');
-            if (prev) prev.querySelector('div').style.borderColor = 'transparent';
-        }
-        // Activate new
-        parent.highlightSvgColor(hexColor, true);
-        el.querySelector('div').style.borderColor = '#3b82f6';
-        window._activePaletteColor = hexColor;
-    }
-};
-</script>
-"""
 
 # ── Gradio app ────────────────────────────────────────────────────────────────
 
@@ -458,33 +254,18 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
 
     gr.Markdown("---")
 
-    # ── Main input / preview row ──────────────────────────────────────────────
+    # ── Main input row ───────────────────────────────────────────────────────
     with gr.Row():
-        with gr.Column(scale=2):
-            image_input = gr.Image(
-                label="输入图片",
-                type="filepath",
-                height=400,
-            )
-            with gr.Row():
-                vectorize_btn = gr.Button("矢量化", variant="primary")
-                clear_btn = gr.Button("清除")
+        image_input = gr.Image(
+            label="输入图片",
+            type="filepath",
+            height=400,
+        )
+        with gr.Row():
+            vectorize_btn = gr.Button("矢量化", variant="primary")
+            clear_btn = gr.Button("清除")
 
-        with gr.Column(scale=2):
-            svg_output = gr.HTML(value=SVG_PLACEHOLDER, label="SVG 预览")
-
-            # SVG preview controls
-            with gr.Row():
-                zoom_in_btn = gr.Button("🔍+", size="sm")
-                zoom_out_btn = gr.Button("🔍−", size="sm")
-                fit_btn = gr.Button("⊡ Fit", size="sm")
-                actual_btn = gr.Button("1:1", size="sm")
-                fullscreen_btn = gr.Button("⛶", size="sm", elem_id="fullscreen-btn")
-                bg_white_btn = gr.Button("⬜", size="sm")
-                bg_black_btn = gr.Button("⬛", size="sm")
-                bg_transparent_btn = gr.Button("▦", size="sm")
-
-    # ── Comparison slider (Phase 3) ─────────────────────────────────────────
+    # ── Comparison slider ─────────────────────────────────────────────────────
     gr.Markdown("### 效果对比")
     with gr.Row():
         with gr.Column(scale=2):
@@ -494,7 +275,6 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
                 height=460,
             )
         with gr.Column(scale=1):
-            # Compact metadata next to comparison
             metadata_output = gr.Textbox(
                 label="元数据",
                 lines=6,
@@ -611,7 +391,7 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
         if image_file is None:
             gr.Info("请先上传一张图片。")
             return (
-                [SVG_PLACEHOLDER, "", PALETTE_PLACEHOLDER, "",
+                [gr.no_update(), "", PALETTE_PLACEHOLDER, "",
                  None, None, CSS_PLACEHOLDER, None]
             )
 
@@ -619,7 +399,7 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
         if file_size > 50 * 1024 * 1024:
             gr.Info(f"文件过大（{file_size / 1024 / 1024:.1f} MB）。限制为 50 MB。")
             return (
-                [SVG_PLACEHOLDER, "", PALETTE_PLACEHOLDER, "",
+                [gr.no_update(), "", PALETTE_PLACEHOLDER, "",
                  None, None, CSS_PLACEHOLDER, None]
             )
 
@@ -631,18 +411,6 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
                 corner_angle_threshold, smoothness, smoothing_spatial,
                 smoothing_color, upscale_short_edge, max_working_pixels,
                 enable_subpixel_refine,
-            )
-
-            # Wrap SVG for display — scheduleSvgInit re-attaches wheel/panning
-            wrapped = (
-                '<div id="svg-preview-outer" style="width:100%;height:460px;display:flex;'
-                'align-items:center;justify-content:center;'
-                'background:#ffffff;box-sizing:border-box;overflow:auto;cursor:grab;" '
-                'onload="if(window.scheduleSvgInit)scheduleSvgInit()">'
-                '<div id="svg-preview-inner" style="max-width:100%;transform:translate(0px,0px) scale(1);transform-origin:center center;">'
-                + svg_content +
-                '</div></div>'
-                '<script>scheduleSvgInit();</script>'
             )
 
             # Build image tuple for ImageSlider: (original_path, svg_png_path)
@@ -691,20 +459,20 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
                 comparison_value = None
 
             return (
-                [wrapped, metadata, palette_html, palette_css, comparison_value,
+                [comparison_value, metadata, palette_html, palette_css,
                  svg_path, png_path, svg_content]
             )
 
         except Exception as exc:
             gr.Warning(f"矢量化失败：{exc}")
             return (
-                [SVG_PLACEHOLDER, f"Error: {exc}", PALETTE_PLACEHOLDER, "",
+                [gr.no_update(), f"Error: {exc}", PALETTE_PLACEHOLDER, "",
                  None, None, CSS_PLACEHOLDER, None]
             )
 
     def on_clear():
         return (
-            [None, SVG_PLACEHOLDER, "", PALETTE_PLACEHOLDER, "",
+            [None, "", PALETTE_PLACEHOLDER, "",
              None, None, CSS_PLACEHOLDER, None]
         )
 
@@ -715,14 +483,14 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
                 corner_angle_threshold, smoothness, smoothing_spatial,
                 smoothing_color, upscale_short_edge, max_working_pixels,
                 enable_subpixel_refine],
-        outputs=[svg_output, metadata_output, palette_output, palette_export,
-                 comparison_slider, svg_download, png_download, svg_source_hidden],
+        outputs=[comparison_slider, metadata_output, palette_output, palette_export,
+                 svg_download, png_download, svg_source_hidden],
         show_progress="full",
     )
 
     clear_btn.click(
         on_clear,
-        outputs=[image_input, svg_output, metadata_output, palette_output,
+        outputs=[image_input, metadata_output, palette_output,
                  palette_export, comparison_slider, svg_download, png_download, svg_source_hidden],
     )
 
@@ -740,105 +508,10 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
             "}",
     )
 
-    # SVG preview controls
-    zoom_in_btn.click(
-        None,
-        js="() => { "
-            "var inner = document.getElementById('svg-preview-inner'); "
-            "if (!inner) return; "
-            "var cur = inner.style.transform.match(/scale\\(([\\d.]+)\\)/); "
-            "var level = cur ? parseFloat(cur[1]) : 1; "
-            "level = Math.min(20, level * 1.25); "
-            "var m = inner.style.transform.match(/translate\\(([\\d.-]+)px, ([\\d.-]+)px\\)/); "
-            "var tx = m ? m[1] : '0'; var ty = m ? m[2] : '0'; "
-            "inner.style.transform = 'translate(' + tx + 'px, ' + ty + 'px) scale(' + level + ')'; "
-            "inner.style.transformOrigin = 'center center'; "
-            "}",
-    )
-
-    zoom_out_btn.click(
-        None,
-        js="() => { "
-            "var inner = document.getElementById('svg-preview-inner'); "
-            "if (!inner) return; "
-            "var cur = inner.style.transform.match(/scale\\(([\\d.]+)\\)/); "
-            "var level = cur ? parseFloat(cur[1]) : 1; "
-            "level = Math.max(0.1, level / 1.25); "
-            "var m = inner.style.transform.match(/translate\\(([\\d.-]+)px, ([\\d.-]+)px\\)/); "
-            "var tx = m ? m[1] : '0'; var ty = m ? m[2] : '0'; "
-            "inner.style.transform = 'translate(' + tx + 'px, ' + ty + 'px) scale(' + level + ')'; "
-            "inner.style.transformOrigin = 'center center'; "
-            "}",
-    )
-
-    fit_btn.click(
-        None,
-        js="() => { "
-            "var outer = document.getElementById('svg-preview-outer'); "
-            "var inner = document.getElementById('svg-preview-inner'); "
-            "if (!outer || !inner) return; "
-            "var svg = inner.querySelector('svg'); "
-            "if (!svg) return; "
-            "var vb = svg.getAttribute('viewBox'); "
-            "var w, h; "
-            "if (vb) { var p = vb.split(' ').map(Number); w = p[2]; h = p[3]; } "
-            "else { w = parseFloat(svg.getAttribute('width')) || inner.offsetWidth; "
-            "       h = parseFloat(svg.getAttribute('height')) || inner.offsetHeight; } "
-            "var scaleX = (outer.offsetWidth - 16) / w; "
-            "var scaleY = (outer.offsetHeight - 16) / h; "
-            "var scale = Math.min(scaleX, scaleY, 2); "
-            "inner.style.transform = 'translate(0px,0px) scale(' + scale + ')'; "
-            "inner.style.transformOrigin = 'center center'; "
-            "}",
-    )
-
-    actual_btn.click(
-        None,
-        js="() => { "
-            "var inner = document.getElementById('svg-preview-inner'); "
-            "if (!inner) return; "
-            "inner.style.transform = 'translate(0px,0px) scale(1)'; "
-            "inner.style.transformOrigin = 'center center'; "
-            "}",
-    )
-
-    fullscreen_btn.click(
-        None,
-        js="() => { "
-            "var outer = document.getElementById('svg-preview-outer'); "
-            "if (!outer) return; "
-            "if (!document.fullscreenElement) { "
-            "  outer.requestFullscreen().catch(function(e){ console.error(e); }); "
-            "} else { "
-            "  document.exitFullscreen(); "
-            "} "
-            "}",
-    )
-
-    # Background buttons
-    for bg_name, bg_val in [("white", "#ffffff"), ("black", "#111111")]:
-        bg_btn = bg_white_btn if bg_name == "white" else bg_black_btn
-        bg_btn.click(
-            None,
-            js=f"() => {{ "
-                f"var outer = document.getElementById('svg-preview-outer'); "
-                f"if (outer) outer.style.background = '{bg_val}'; "
-                f"}}",
-        )
-
-    bg_transparent_btn.click(
-        None,
-        js="() => { "
-            "var outer = document.getElementById('svg-preview-outer'); "
-            "if (outer) outer.style.background = "
-            "'repeating-conic-gradient(#e0e0e0 0% 25%, #fff 0% 50%) 50%/16px 16px'; "
-            "}",
-    )
-
 
 if __name__ == "__main__":
     demo.launch(
         server_port=7861,
         server_name="0.0.0.0",
-        head=SVG_PREVIEW_JS + COPY_FEEDBACK_JS + TOGGLE_HIGHLIGHT_JS,
+        head=SVG_PREVIEW_JS + COPY_FEEDBACK_JS,
     )
