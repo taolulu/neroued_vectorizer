@@ -209,7 +209,7 @@ async function copySvgNow() {
         var btn = document.getElementById('copy-svg-btn');
         if (btn) {
             var orig = btn.textContent;
-            btn.textContent = 'Copied!';
+            btn.textContent = '已复制！';
             btn.style.color = '#22c55e';
             setTimeout(function() {
                 btn.textContent = orig;
@@ -293,7 +293,7 @@ def build_enhanced_palette_html(
         + ''.join(swatches)
         + '</div>'
         + f'<div style="margin-top:8px;font-size:12px;color:#888;">'
-        f'Click a swatch to highlight its regions in the SVG above</div>'
+        f'点击色块以高亮显示 SVG 中对应的区域</div>'
     )
 
 
@@ -343,10 +343,10 @@ def vectorize_image(
     palette_css = build_palette_export_css(result.palette)
 
     metadata = (
-        f"Width: {result.width} px\n"
-        f"Height: {result.height} px\n"
-        f"Shapes: {result.num_shapes}\n"
-        f"Colors: {result.resolved_num_colors}\n"
+        f"宽度：{result.width} px\n"
+        f"高度：{result.height} px\n"
+        f"形状数：{result.num_shapes}\n"
+        f"颜色数：{result.resolved_num_colors}\n"
         + "\n".join(
             f"  {i+1}. #{int(c.r*255):02x}{int(c.g*255):02x}{int(c.b*255):02x}"
             for i, c in enumerate(result.palette)
@@ -372,10 +372,9 @@ def vectorize_image(
 
 # ── App constants ─────────────────────────────────────────────────────────────
 
-BLOCK_TITLE = "neroued-vectorizer"
+BLOCK_TITLE = "neroued 矢量化器"
 DESCRIPTION = (
-    "High-quality raster-to-SVG vectorizer. Upload an image, tune the parameters "
-    "below, and click **Vectorize** to generate the SVG."
+    "高质量栅格转 SVG 矢量化工具。上传图片、调整下方的参数，点击 **矢量化** 即可生成 SVG。"
 )
 
 SVG_PLACEHOLDER = (
@@ -383,7 +382,7 @@ SVG_PLACEHOLDER = (
     'align-items:center;justify-content:center;border:1px dashed #ccc;'
     'background:#ffffff;box-sizing:border-box;overflow:auto;cursor:default;">'
     '<div id="svg-preview-inner" style="color:#aaa;font-size:14px;text-align:center;padding:20px;">'
-    'SVG preview will appear here after vectorization'
+    '矢量化完成后，SVG 预览将在此处显示'
     '</div></div>'
 )
 
@@ -397,19 +396,19 @@ SVG_LOADING = (
     '<circle cx="24" cy="24" r="20" fill="none" stroke="#e0e0e0" stroke-width="4"/>'
     '<path d="M24 4 A20 20 0 0 1 44 24" fill="none" stroke="#6366f1" stroke-width="4" stroke-linecap="round"/>'
     '</svg>'
-    '<div style="margin-top:12px;color:#6366f1;font-size:14px;font-weight:500;">Vectorizing...</div>'
-    '<div style="margin-top:4px;color:#aaa;font-size:12px;">This may take a moment</div>'
+    '<div style="margin-top:12px;color:#6366f1;font-size:14px;font-weight:500;">正在矢量化...</div>'
+    '<div style="margin-top:4px;color:#aaa;font-size:12px;">请稍候</div>'
     '</div></div>'
     '<style>@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}</style>'
     '</div>'
 )
 
 PALETTE_PLACEHOLDER = (
-    '<div style="color:#aaa;font-size:14px;">Color palette will appear here</div>'
+    '<div style="color:#aaa;font-size:14px;">调色板将在此处显示</div>'
 )
 
 CSS_PLACEHOLDER = (
-    '<div style="color:#aaa;font-size:13px;font-family:monospace;">CSS variables will appear here</div>'
+    '<div style="color:#aaa;font-size:13px;font-family:monospace;">CSS 变量将在此处显示</div>'
 )
 
 PRESETS = {
@@ -451,11 +450,11 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
     gr.Markdown(DESCRIPTION)
 
     # ── Presets row ──────────────────────────────────────────────────────────
-    gr.Markdown("### Presets")
+    gr.Markdown("### 预设")
     with gr.Row():
-        preset_photograph_btn = gr.Button("Photograph", size="sm")
-        preset_illustration_btn = gr.Button("Illustration", size="sm")
-        preset_lineart_btn = gr.Button("Line Art", size="sm")
+        preset_photograph_btn = gr.Button("照片", size="sm")
+        preset_illustration_btn = gr.Button("插画", size="sm")
+        preset_lineart_btn = gr.Button("线稿", size="sm")
 
     gr.Markdown("---")
 
@@ -463,16 +462,16 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
     with gr.Row():
         with gr.Column(scale=2):
             image_input = gr.Image(
-                label="Input Image",
+                label="输入图片",
                 type="filepath",
                 height=400,
             )
             with gr.Row():
-                vectorize_btn = gr.Button("Vectorize", variant="primary")
-                clear_btn = gr.Button("Clear")
+                vectorize_btn = gr.Button("矢量化", variant="primary")
+                clear_btn = gr.Button("清除")
 
         with gr.Column(scale=2):
-            svg_output = gr.HTML(value=SVG_PLACEHOLDER, label="SVG Preview")
+            svg_output = gr.HTML(value=SVG_PLACEHOLDER, label="SVG 预览")
 
             # SVG preview controls
             with gr.Row():
@@ -486,76 +485,76 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
                 bg_transparent_btn = gr.Button("▦", size="sm")
 
     # ── Comparison slider (Phase 3) ─────────────────────────────────────────
-    gr.Markdown("### Before / After Comparison")
+    gr.Markdown("### 效果对比")
     with gr.Row():
         with gr.Column(scale=2):
             comparison_slider = gr.ImageSlider(
-                label="Slide to compare — Left: Original  |  Right: Vectorized",
+                label="拖动滑块对比 — 左侧：原图  |  右侧：矢量化结果",
                 slider_position=50,
                 height=460,
             )
         with gr.Column(scale=1):
             # Compact metadata next to comparison
             metadata_output = gr.Textbox(
-                label="Metadata",
+                label="元数据",
                 lines=6,
                 interactive=False,
             )
 
     # ── Parameters ───────────────────────────────────────────────────────────
-    gr.Markdown("### Configuration")
+    gr.Markdown("### 参数配置")
 
     with gr.Row():
         with gr.Column():
             num_colors = gr.Slider(
-                label="Number of Colors (0 = auto)",
+                label="颜色数量（0 = 自动）",
                 minimum=0, maximum=256, value=0, step=1,
             )
             min_region_area = gr.Slider(
-                label="Min Region Area (px²)",
+                label="最小区域面积（px²）",
                 minimum=0, maximum=500, value=0, step=1,
             )
             curve_fit_error = gr.Slider(
-                label="Curve Fit Error (px)",
+                label="曲线拟合误差（px）",
                 minimum=0.1, maximum=10.0, value=1.0, step=0.1,
             )
             corner_angle_threshold = gr.Slider(
-                label="Corner Angle Threshold (°)",
+                label="拐角角度阈值（°）",
                 minimum=1.0, maximum=180.0, value=60.0, step=1.0,
             )
             smoothness = gr.Slider(
-                label="Smoothness [0, 1]",
+                label="平滑度 [0, 1]",
                 minimum=0.0, maximum=1.0, value=0.3, step=0.01,
             )
 
         with gr.Column():
             smoothing_spatial = gr.Slider(
-                label="Smoothing Spatial Radius",
+                label="平滑空间半径",
                 minimum=0.0, maximum=50.0, value=10.0, step=0.5,
             )
             smoothing_color = gr.Slider(
-                label="Smoothing Color Radius",
+                label="平滑色彩半径",
                 minimum=0.0, maximum=50.0, value=10.0, step=0.5,
             )
             upscale_short_edge = gr.Slider(
-                label="Upscale Short Edge (0 = off)",
+                label="放大短边（0 = 关闭）",
                 minimum=0, maximum=2000, value=0, step=1,
             )
             max_working_pixels = gr.Slider(
-                label="Max Working Pixels (0 = off)",
+                label="最大处理像素（0 = 关闭）",
                 minimum=0, maximum=50000000, value=4000000, step=100000,
             )
             enable_subpixel_refine = gr.Checkbox(
-                label="Enable Sub-pixel Refinement",
+                label="启用亚像素细化",
                 value=True,
             )
 
     # ── Results ─────────────────────────────────────────────────────────────
-    gr.Markdown("### Result")
+    gr.Markdown("### 结果")
 
     # Hidden textbox that stores raw SVG — used by JS copy function
     svg_source_hidden = gr.Textbox(
-        label="SVG Source",
+        label="SVG 源码",
         lines=6,
         visible=False,
         elem_id="svg-source-hidden",
@@ -565,21 +564,21 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
         with gr.Column(scale=1):
             palette_output = gr.HTML(
                 value=PALETTE_PLACEHOLDER,
-                label="Color Palette",
+                label="调色板",
             )
             palette_export = gr.Code(
                 value="",
                 language="css",
-                label="Palette as CSS Variables",
+                label="调色板（CSS 变量格式）",
                 lines=6,
                 visible=True,
             )
         with gr.Column(scale=1):
             with gr.Row():
-                svg_download = gr.File(label="Download SVG", visible=True)
-                png_download = gr.File(label="Download PNG (rendered)", visible=True)
+                svg_download = gr.File(label="下载 SVG", visible=True)
+                png_download = gr.File(label="下载 PNG（渲染图）", visible=True)
             copy_svg_btn = gr.Button(
-                "Copy SVG Source",
+                "复制 SVG 源码",
                 size="sm",
                 elem_id="copy-svg-btn",
             )
@@ -610,7 +609,7 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
         enable_subpixel_refine,
     ):
         if image_file is None:
-            gr.Info("Please upload an image first.")
+            gr.Info("请先上传一张图片。")
             return (
                 [SVG_PLACEHOLDER, "", PALETTE_PLACEHOLDER, "",
                  None, None, CSS_PLACEHOLDER, None]
@@ -618,7 +617,7 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
 
         file_size = Path(image_file).stat().st_size
         if file_size > 50 * 1024 * 1024:
-            gr.Info(f"File too large ({file_size / 1024 / 1024:.1f} MB). Limit is 50 MB.")
+            gr.Info(f"文件过大（{file_size / 1024 / 1024:.1f} MB）。限制为 50 MB。")
             return (
                 [SVG_PLACEHOLDER, "", PALETTE_PLACEHOLDER, "",
                  None, None, CSS_PLACEHOLDER, None]
@@ -697,7 +696,7 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
             )
 
         except Exception as exc:
-            gr.Warning(f"Vectorization failed: {exc}")
+            gr.Warning(f"矢量化失败：{exc}")
             return (
                 [SVG_PLACEHOLDER, f"Error: {exc}", PALETTE_PLACEHOLDER, "",
                  None, None, CSS_PLACEHOLDER, None]
@@ -735,8 +734,8 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
             "if (!src || !src.value) { return; } "
             "navigator.clipboard.writeText(src.value).then(function() { "
             "  var btn = document.getElementById('copy-svg-btn'); "
-            "  if (btn) { btn.textContent = 'Copied!'; btn.style.color = '#22c55e'; "
-            "    setTimeout(function(){ btn.textContent = 'Copy SVG Source'; btn.style.color = ''; }, 1500); } "
+            "  if (btn) { btn.textContent = '已复制！'; btn.style.color = '#22c55e'; "
+            "    setTimeout(function(){ btn.textContent = '复制 SVG 源码'; btn.style.color = ''; }, 1500); } "
             "}).catch(function(e){ console.error(e); }); "
             "}",
     )
