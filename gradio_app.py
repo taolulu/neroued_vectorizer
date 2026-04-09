@@ -1,16 +1,20 @@
 """Gradio Web UI for neroued-vectorizer service — visual & responsive overhaul."""
 
 from __future__ import annotations
-
+import io
 import re
 import tempfile
 from pathlib import Path
 
+from PIL import Image
 import cairosvg
 import gradio as gr
 from gradio.themes import Default as DefaultTheme
 
 import neroued_vectorizer as nv
+
+# ── Module-level session history (survives across event calls) ────────────────
+_session_history: list[dict] = []
 
 # ── SVG Preview JavaScript ───────────────────────────────────────────────────
 
@@ -196,7 +200,122 @@ def build_palette_export_css(palette: list) -> str:
     return "\n".join(lines)
 
 
-# ── Vectorization ─────────────────────────────────────────────────────────────
+# ── File info on upload ───────────────────────────────────────────────────────
+
+def build_file_info_html(image_file: str | None) -> str:
+    """Build HTML showing image dimensions, file size, and mode."""
+    if image_file is None:
+        return (
+            '<div style="color:#9090b0;font-size:12px;font-family:monospace;padding:4px 0;">'
+            '未上传图片</div>'
+        )
+    try:
+        stat = Path(image_file).stat()
+        file_size_kb = stat.st_size / 1024
+        if file_size_kb >= 1024:
+            size_str = f"{file_size_kb/1024:.1f} MB"
+        else:
+            size_str = f"{file_size_kb:.0f} KB"
+
+        with Image.open(image_file) as img:
+            width, height = img.size
+            mode = img.mode
+
+        mode_map = {"RGB": "彩色 (RGB)", "RGBA": "彩色+透明 (RGBA)", "L": "灰度 (L)", "1": "黑白 (1-bit)", "P": "调色板 (P)"}
+        mode_label = mode_map.get(mode, f"{mode}")
+
+        return (
+            f'<div style="display:flex;gap:16px;flex-wrap:wrap;padding:6px 0;">'
+            f'<span style="color:#9090b0;font-size:12px;font-family:monospace;">'
+            f'📐 {width} × {height} px</span>'
+            f'<span style="color:#9090b0;font-size:12px;font-family:monospace;">'
+            f'💾 {size_str}</span>'
+            f'<span style="color:#9090b0;font-size:12px;font-family:monospace;">'
+            f'🎨 {mode_label}</span>'
+            f'</div>'
+        )
+    except Exception as e:
+        return (
+            '<div style="color:#9090b0;font-size:12px;font-family:monospace;padding:4px 0;">'
+            f'无法读取图片信息: {e}</div>'
+        )
+
+
+# ── Vectorization (with progress) ───────────────────────────────────────────
+
+def vectorize_image_gen(
+    image_file: str | bytes,
+    num_colors: int,
+    min_region_area: int,
+    curve_fit_error: float,
+    corner_angle_threshold: float,
+    smoothness: float,
+    smoothing_spatial: float,
+    smoothing_color: float,
+    upscale_short_edge: int,
+    max_working_pixels: int,
+    enable_subpixel_refine: bool,
+):
+    """Generator: vectorize with per-stage progress yields.
+
+    Yields None placeholders for each stage; the caller consumes them
+    to drive Gradio's progress bar via show_progress="full".
+    """
+
+    # Stage 1: configure
+    config = nv.VectorizerConfig()
+    config.num_colors = num_colors
+    config.min_region_area = min_region_area
+    config.curve_fit_error = curve_fit_error
+    config.corner_angle_threshold = corner_angle_threshold
+    config.smoothness = smoothness
+    config.smoothing_spatial = smoothing_spatial
+    config.smoothing_color = smoothing_color
+    config.upscale_short_edge = upscale_short_edge
+    config.max_working_pixels = max_working_pixels
+    config.enable_subpixel_refine = enable_subpixel_refine
+    yield None
+
+    # Stage 2: core vectorization
+    result = nv.vectorize(image_file, config)
+    yield None
+
+    # Stage 3: build palette
+    palette_html = build_enhanced_palette_html(result.svg_content, result.palette)
+    palette_css = build_palette_export_css(result.palette)
+    yield None
+
+    # Stage 4: metadata
+    metadata = (
+        f"宽度：{result.width} px\n"
+        f"高度：{result.height} px\n"
+        f"形状数：{result.num_shapes}\n"
+        f"颜色数：{result.resolved_num_colors}\n"
+        + "\n".join(
+            f"  {i+1}. #{int(c.r*255):02x}{int(c.g*255):02x}{int(c.b*255):02x}"
+            for i, c in enumerate(result.palette)
+        )
+    )
+    yield None
+
+    # Stage 5: render PNG preview
+    png_bytes = None
+    try:
+        png_bytes = render_svg_to_png_bytes(result.svg_content, result.width, result.height)
+    except Exception as e:
+        print(f"[Warning] Could not render SVG to PNG: {e}")
+    yield None
+
+    # Done
+    yield (
+        result.svg_content,
+        metadata,
+        palette_html,
+        palette_css,
+        png_bytes,
+        image_file,
+    )
+
 
 def vectorize_image(
     image_file: str | bytes,
@@ -211,7 +330,7 @@ def vectorize_image(
     max_working_pixels: int,
     enable_subpixel_refine: bool,
 ) -> tuple[str, str, str, str, bytes | None, str]:
-    """Vectorize an image and return SVG content, metadata, palette HTML, palette CSS, PNG bytes, original image path."""
+    """Vectorize an image (sync version, no progress)."""
     config = nv.VectorizerConfig()
     config.num_colors = num_colors
     config.min_region_area = min_region_area
@@ -497,6 +616,13 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
                 height=320,
             )
 
+            # File info display (updated on upload)
+            file_info_output = gr.HTML(
+                value='<div style="color:#9090b0;font-size:12px;font-family:monospace;padding:4px 0;">'
+                      '未上传图片</div>',
+                elem_id="file-info-display",
+            )
+
             with gr.Row():
                 vectorize_btn = gr.Button("✨ 矢量化", variant="primary", size="lg")
                 clear_btn = gr.Button("🗑 清空", size="lg")
@@ -514,6 +640,14 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
                 elem_id="svg-source-hidden",
             )
 
+            # Session history
+            gr.Markdown("---")
+            gr.Markdown('<p class="section-header">📜 本次会话历史</p>')
+            history_output = gr.HTML(
+                value='<div style="color:#9090b0;font-size:12px;padding:4px 0;">尚无历史记录</div>',
+                elem_id="history-list",
+            )
+
         # ── RIGHT: Parameters + Results ───────────────────────────────────
         with gr.Column(scale=1, elem_classes=["right-panel"]):
 
@@ -523,16 +657,19 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
             with gr.Accordion("🎨 色彩与区域", open=True, elem_classes=["param-accordion"]):
                 num_colors = gr.Slider(
                     label="颜色数量（0 = 自动）",
+                    info="输出 SVG 中的最大颜色数。设为 0 则由算法自动判断适合的数量。",
                     minimum=0, maximum=256, value=0, step=1,
                     elem_id="num-colors-slider",
                 )
                 min_region_area = gr.Slider(
                     label="最小区域面积（px²）",
+                    info="小于此面积的色块会被忽略并合并到周围区域。可去除噪点。",
                     minimum=0, maximum=500, value=0, step=1,
                     elem_id="min-region-slider",
                 )
                 enable_subpixel_refine = gr.Checkbox(
                     label="启用亚像素细化",
+                    info="在像素级别优化边缘，减少锯齿和色差。略微增加处理时间。",
                     value=True,
                     elem_id="subpixel-checkbox",
                 )
@@ -540,16 +677,19 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
             with gr.Accordion("📐 曲线与形状", open=True, elem_classes=["param-accordion"]):
                 curve_fit_error = gr.Slider(
                     label="曲线拟合误差（px）",
+                    info="允许的曲线与原始边缘最大偏差（像素）。越大曲线越平滑简洁，越小越接近原始形状。",
                     minimum=0.1, maximum=10.0, value=1.0, step=0.1,
                     elem_id="curve-error-slider",
                 )
                 corner_angle_threshold = gr.Slider(
                     label="拐角角度阈值（°）",
+                    info="小于此角度的角点会被当作尖角保留；越大越容易将尖锐转角变成圆弧。",
                     minimum=1.0, maximum=180.0, value=60.0, step=1.0,
                     elem_id="corner-angle-slider",
                 )
                 smoothness = gr.Slider(
                     label="平滑度 [0, 1]",
+                    info="贝塞尔曲线平滑系数。0 保持原始锯齿，1 最平滑但可能失真。",
                     minimum=0.0, maximum=1.0, value=0.3, step=0.01,
                     elem_id="smoothness-slider",
                 )
@@ -557,21 +697,25 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
             with gr.Accordion("🔧 高级选项", open=False, elem_classes=["param-accordion"]):
                 smoothing_spatial = gr.Slider(
                     label="平滑空间半径",
+                    info="空间高斯模糊的半径（像素）。值越大颜色过渡越柔和。",
                     minimum=0.0, maximum=50.0, value=10.0, step=0.5,
                     elem_id="smooth-spatial-slider",
                 )
                 smoothing_color = gr.Slider(
                     label="平滑色彩半径",
+                    info="色彩空间高斯模糊半径。值越大相近颜色越容易融合。",
                     minimum=0.0, maximum=50.0, value=10.0, step=0.5,
                     elem_id="smooth-color-slider",
                 )
                 upscale_short_edge = gr.Slider(
                     label="放大短边（0 = 关闭）",
+                    info="在处理前先将图片短边放大到此像素值再矢量化。可提升小图的细节保留。",
                     minimum=0, maximum=2000, value=0, step=1,
                     elem_id="upscale-slider",
                 )
                 max_working_pixels = gr.Slider(
                     label="最大处理像素（0 = 关闭）",
+                    info="处理过程中工作区的最大像素数。超过则等比缩小。可防止内存溢出。",
                     minimum=0, maximum=50000000, value=4000000, step=100000,
                     elem_id="max-pixels-slider",
                 )
@@ -716,12 +860,18 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
     </script>
     """
 
+    def on_upload(image_file):
+        """Update file info display when an image is uploaded."""
+        return build_file_info_html(image_file)
+
     def on_vectorize(
         image_file, num_colors, min_region_area, curve_fit_error,
         corner_angle_threshold, smoothness, smoothing_spatial,
         smoothing_color, upscale_short_edge, max_working_pixels,
         enable_subpixel_refine,
     ):
+        global _session_history
+
         if image_file is None:
             gr.Info("请先上传一张图片。")
             return (
@@ -737,15 +887,40 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
                  None, None, CSS_PLACEHOLDER, None]
             )
 
+        params = {
+            "num_colors": num_colors,
+            "min_region_area": min_region_area,
+            "curve_fit_error": curve_fit_error,
+            "corner_angle_threshold": corner_angle_threshold,
+            "smoothness": smoothness,
+            "smoothing_spatial": smoothing_spatial,
+            "smoothing_color": smoothing_color,
+            "upscale_short_edge": upscale_short_edge,
+            "max_working_pixels": max_working_pixels,
+            "enable_subpixel_refine": enable_subpixel_refine,
+        }
+
         try:
-            (svg_content, metadata, palette_html,
-             palette_css, png_bytes,
-             original_image) = vectorize_image(
+            # Iterate through generator (each yield updates the Gradio progress bar)
+            gen = vectorize_image_gen(
                 image_file, num_colors, min_region_area, curve_fit_error,
                 corner_angle_threshold, smoothness, smoothing_spatial,
                 smoothing_color, upscale_short_edge, max_working_pixels,
                 enable_subpixel_refine,
             )
+
+            # Consume all intermediate None yields (progress updates)
+            result = None
+            for step in gen:
+                if step is not None:
+                    result = step
+
+            if result is None:
+                raise RuntimeError("矢量化未返回结果")
+
+            (svg_content, metadata, palette_html,
+             palette_css, png_bytes,
+             original_image) = result
 
             if png_bytes is not None:
                 svg_png_tmpdir = Path(tempfile.gettempdir()) / "neroued-vectorizer"
@@ -788,6 +963,15 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
             else:
                 comparison_value = None
 
+            # Build history entry
+            shapes_str = ""
+            if "形状数：" in metadata:
+                parts = metadata.split("形状数：")
+                if len(parts) > 1:
+                    shapes_str = parts[1].split("\n")[0]
+            label = f"#{len(_session_history)+1} {num_colors}色 / 形状{shapes_str}"
+            _session_history.append({"label": label, "params": params})
+
             return (
                 [comparison_value, metadata, palette_html, palette_css,
                  svg_path, png_path, svg_content]
@@ -800,11 +984,70 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
                  None, None, CSS_PLACEHOLDER, None]
             )
 
+    def on_history_select(history_index: int, history):
+        """Load parameters from a history entry back into the sliders."""
+        if not history or history_index >= len(history):
+            return [gr.no_update()] * 10
+        entry = history[history_index]
+        p = entry["params"]
+        return [
+            gr.update(value=p["num_colors"]),
+            gr.update(value=p["min_region_area"]),
+            gr.update(value=p["curve_fit_error"]),
+            gr.update(value=p["corner_angle_threshold"]),
+            gr.update(value=p["smoothness"]),
+            gr.update(value=p["smoothing_spatial"]),
+            gr.update(value=p["smoothing_color"]),
+            gr.update(value=p["upscale_short_edge"]),
+            gr.update(value=p["max_working_pixels"]),
+            gr.update(value=p["enable_subpixel_refine"]),
+        ]
+
+    def build_history_html() -> str:
+        """Build clickable HTML list of history entries (reads module-level _session_history)."""
+        global _session_history
+        if not _session_history:
+            return '<div style="color:#9090b0;font-size:12px;padding:4px 0;">尚无历史记录</div>'
+        items = []
+        for i, entry in enumerate(reversed(_session_history)):
+            items.append(
+                f'<div class="history-item" onclick="loadHistory({i})" '
+                f'style="cursor:pointer;padding:6px 8px;margin-bottom:4px;'
+                f'background:#313147;border-radius:6px;font-size:12px;font-family:monospace;'
+                f'color:#e2e2f0;transition:background 0.15s;" '
+                f'onmouseover="this.style.background=\'#3a3a5c\'" '
+                f'onmouseout="this.style.background=\'#313147\'">'
+                f'↩ {entry["label"]}</div>'
+            )
+        return "\n".join(items)
+
     def on_clear():
+        global _session_history
+        _session_history = []
         return (
             [None, "", PALETTE_PLACEHOLDER, "",
              None, None, CSS_PLACEHOLDER, None]
         )
+
+    def on_history_select(history_index: int):
+        """Load parameters from a history entry back into the sliders."""
+        global _session_history
+        if history_index is None or history_index >= len(_session_history):
+            return [gr.no_update()] * 10
+        entry = _session_history[history_index]
+        p = entry["params"]
+        return [
+            gr.update(value=p["num_colors"]),
+            gr.update(value=p["min_region_area"]),
+            gr.update(value=p["curve_fit_error"]),
+            gr.update(value=p["corner_angle_threshold"]),
+            gr.update(value=p["smoothness"]),
+            gr.update(value=p["smoothing_spatial"]),
+            gr.update(value=p["smoothing_color"]),
+            gr.update(value=p["upscale_short_edge"]),
+            gr.update(value=p["max_working_pixels"]),
+            gr.update(value=p["enable_subpixel_refine"]),
+        ]
 
     # Main vectorize event
     vectorize_btn.click(
@@ -815,14 +1058,68 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
                 enable_subpixel_refine],
         outputs=[comparison_slider, metadata_output, palette_output, palette_export,
                  svg_download, png_download, svg_source_hidden],
-        show_progress="full",
+    ).then(
+        fn=build_history_html,
+        inputs=None,
+        outputs=[history_output],
     )
 
     clear_btn.click(
         on_clear,
         outputs=[image_input, metadata_output, palette_output,
                  palette_export, comparison_slider, svg_download, png_download, svg_source_hidden],
+    ).then(
+        fn=build_history_html,
+        inputs=None,
+        outputs=[history_output],
     )
+
+    # Upload → file info
+    image_input.upload(
+        on_upload,
+        inputs=[image_input],
+        outputs=[file_info_output],
+    )
+
+    # Hidden index carrier for history selection
+    history_index_input = gr.Number(visible=False, value=None, container=False)
+
+    def on_history_index_change(index):
+        """Triggered when JS writes the selected history index to the hidden field."""
+        if index is None:
+            return [gr.no_update()] * 10
+        return on_history_select(int(index))
+
+    history_index_input.change(
+        fn=on_history_index_change,
+        inputs=[history_index_input],
+        outputs=[num_colors, min_region_area, curve_fit_error,
+                 corner_angle_threshold, smoothness, smoothing_spatial,
+                 smoothing_color, upscale_short_edge, max_working_pixels,
+                 enable_subpixel_refine],
+        queue=False,
+    )
+
+    # History JS function
+    history_js = """
+    <script>
+    function loadHistory(idx) {
+        // Write the clicked history index to the hidden Number field
+        var inp = document.querySelector('input[type="number"][aria-label=""]');
+        if (!inp) return;
+        // Gradio stores the hidden number in a zero-sized input
+        var allInputs = document.querySelectorAll('input[type="number"]');
+        for (var i = 0; i < allInputs.length; i++) {
+            if (allInputs[i].offsetParent === null || allInputs[i].style.display === 'none') {
+                allInputs[i].value = idx;
+                allInputs[i].dispatchEvent(new Event('input', {bubbles: true}));
+                allInputs[i].dispatchEvent(new Event('change', {bubbles: true}));
+                break;
+            }
+        }
+    }
+    </script>
+    """
 
     # Copy SVG button
     copy_svg_btn.click(
@@ -850,5 +1147,5 @@ if __name__ == "__main__":
             font=("Inter", "system-ui", "sans-serif"),
         ),
         css=CUSTOM_CSS,
-        head=SVG_PREVIEW_JS + COPY_FEEDBACK_JS + preset_js,
+        head=SVG_PREVIEW_JS + COPY_FEEDBACK_JS + preset_js + history_js,
     )
