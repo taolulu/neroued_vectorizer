@@ -16,10 +16,6 @@ import neroued_vectorizer as nv
 # ── Module-level session history (survives across event calls) ────────────────
 _session_history: list[dict] = []
 
-# ── Module-level UI state ─────────────────────────────────────────────────────
-# 'idle' | 'uploaded' | 'loading' | 'result'
-_ui_state: str = "idle"
-
 # ── SVG Preview JavaScript ────────────────────────────────────────────────────
 
 SVG_PREVIEW_JS = """
@@ -662,6 +658,7 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
             gr.update(visible=True),   # clear_btn
             gr.update(visible=False),   # loading_indicator
             gr.update(visible=False),   # result_display
+            gr.update(visible=True, interactive=True),   # vectorize_btn
         )
 
 
@@ -676,6 +673,7 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
             gr.update(visible=False),   # result_display
             '<div style="color:#9090b0;font-size:12px;font-family:monospace;padding:4px 0;">未上传图片</div>',
             gr.update(visible=False),   # download_area
+            gr.update(visible=False, interactive=False),   # vectorize_btn
         )
 
 
@@ -689,12 +687,12 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
 
         if image_file is None:
             gr.Info("请先上传一张图片。")
-            return [gr.no_update()] * 6
+            return [gr.no_update()] * 10
 
         file_size = Path(image_file).stat().st_size
         if file_size > 50 * 1024 * 1024:
             gr.Info(f"文件过大（{file_size / 1024 / 1024:.1f} MB）。限制为 50 MB。")
-            return [gr.no_update()] * 6
+            return [gr.no_update()] * 10
 
         params = {
             "num_colors": num_colors,
@@ -788,11 +786,12 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
                 svg_path,                           # svg_download
                 png_path,                           # png_download
                 svg_content,                        # svg_source_hidden
+                gr.update(visible=False),           # vectorize_btn (hidden in result)
             )
 
         except Exception as exc:
             gr.Warning(f"矢量化失败：{exc}")
-            return [gr.no_update()] * 9
+            return [gr.no_update()] * 10
 
 
     def build_history_html() -> str:
@@ -849,21 +848,23 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
     upload_zone.upload(
         on_upload,
         inputs=[upload_zone],
-        outputs=[file_info_output, clear_btn, loading_indicator, result_display],
+        outputs=[file_info_output, clear_btn, loading_indicator, result_display,
+                 vectorize_btn],
     )
 
     # Upload → also triggered on change (e.g. paste)
     upload_zone.change(
         on_upload,
         inputs=[upload_zone],
-        outputs=[file_info_output, clear_btn, loading_indicator, result_display],
+        outputs=[file_info_output, clear_btn, loading_indicator, result_display,
+                 vectorize_btn],
     )
 
     # Clear button → reset everything
     clear_btn.click(
         on_clear,
         outputs=[upload_zone, clear_btn, loading_indicator, result_display,
-                 file_info_output, download_area],
+                 file_info_output, download_area, vectorize_btn],
     )
 
     # Main vectorize event
@@ -876,7 +877,7 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
         outputs=[
             upload_zone, clear_btn, loading_indicator, result_display,
             file_info_output, download_area,
-            svg_download, png_download, svg_source_hidden,
+            svg_download, png_download, svg_source_hidden, vectorize_btn,
         ],
         show_progress="minimal",
     ).then(
