@@ -285,20 +285,7 @@ def vectorize_image_gen(
     palette_css = build_palette_export_css(result.palette)
     yield None
 
-    # Stage 4: metadata
-    metadata = (
-        f"宽度：{result.width} px\n"
-        f"高度：{result.height} px\n"
-        f"形状数：{result.num_shapes}\n"
-        f"颜色数：{result.resolved_num_colors}\n"
-        + "\n".join(
-            f"  {i+1}. #{int(c.r*255):02x}{int(c.g*255):02x}{int(c.b*255):02x}"
-            for i, c in enumerate(result.palette)
-        )
-    )
-    yield None
-
-    # Stage 5: render PNG preview
+    # Stage 4: render PNG preview
     png_bytes = None
     try:
         png_bytes = render_svg_to_png_bytes(result.svg_content, result.width, result.height)
@@ -309,7 +296,6 @@ def vectorize_image_gen(
     # Done
     yield (
         result.svg_content,
-        metadata,
         palette_html,
         palette_css,
         png_bytes,
@@ -348,17 +334,6 @@ def vectorize_image(
     palette_html = build_enhanced_palette_html(result.svg_content, result.palette)
     palette_css = build_palette_export_css(result.palette)
 
-    metadata = (
-        f"宽度：{result.width} px\n"
-        f"高度：{result.height} px\n"
-        f"形状数：{result.num_shapes}\n"
-        f"颜色数：{result.resolved_num_colors}\n"
-        + "\n".join(
-            f"  {i+1}. #{int(c.r*255):02x}{int(c.g*255):02x}{int(c.b*255):02x}"
-            for i, c in enumerate(result.palette)
-        )
-    )
-
     png_bytes = None
     try:
         png_bytes = render_svg_to_png_bytes(result.svg_content, result.width, result.height)
@@ -367,7 +342,6 @@ def vectorize_image(
 
     return (
         result.svg_content,
-        metadata,
         palette_html,
         palette_css,
         png_bytes,
@@ -455,18 +429,6 @@ body, body.gradio-mode {
 /* Slider track styling */
 input[type="range"] {
     accent-color: var(--primary) !important;
-}
-
-/* Metadata box */
-.metadata-box {
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 12px;
-    font-family: 'JetBrains Mono', 'Fira Code', monospace;
-    font-size: 12px;
-    color: var(--text-muted);
-    line-height: 1.6;
 }
 
 /* Palette swatches */
@@ -578,13 +540,6 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
     )
 
     gr.Markdown('<p class="section-header">📊 结果</p>')
-
-    metadata_output = gr.Textbox(
-        label="元数据",
-        lines=5,
-        interactive=False,
-        elem_classes=["metadata-box"],
-    )
 
     gr.Markdown("#### 🎨 调色板")
     palette_output = gr.HTML(value=PALETTE_PLACEHOLDER)
@@ -781,7 +736,7 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
             if result is None:
                 raise RuntimeError("矢量化未返回结果")
 
-            (svg_content, metadata, palette_html,
+            (svg_content, palette_html,
              palette_css, png_bytes,
              original_image) = result
 
@@ -827,23 +782,18 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
                 comparison_value = None
 
             # Build history entry
-            shapes_str = ""
-            if "形状数：" in metadata:
-                parts = metadata.split("形状数：")
-                if len(parts) > 1:
-                    shapes_str = parts[1].split("\n")[0]
-            label = f"#{len(_session_history)+1} {num_colors}色 / 形状{shapes_str}"
+            label = f"#{len(_session_history)+1} {num_colors}色"
             _session_history.append({"label": label, "params": params})
 
             return (
-                [comparison_value, metadata, palette_html, palette_css,
+                [comparison_value, palette_html, palette_css,
                  svg_path, png_path, svg_content]
             )
 
         except Exception as exc:
             gr.Warning(f"矢量化失败：{exc}")
             return (
-                [gr.no_update(), f"Error: {exc}", PALETTE_PLACEHOLDER, "",
+                [gr.no_update(), PALETTE_PLACEHOLDER, "",
                  None, None, CSS_PLACEHOLDER, None]
             )
 
@@ -869,7 +819,7 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
         global _session_history
         _session_history = []
         return (
-            [None, "", PALETTE_PLACEHOLDER, "",
+            [None, PALETTE_PLACEHOLDER, "",
              None, None, CSS_PLACEHOLDER, None]
         )
 
@@ -909,7 +859,7 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
                 corner_angle_threshold, smoothness, smoothing_spatial,
                 smoothing_color, upscale_short_edge, max_working_pixels,
                 enable_subpixel_refine],
-        outputs=[comparison_slider, metadata_output, palette_output, palette_export,
+        outputs=[comparison_slider, palette_output, palette_export,
                  svg_download, png_download, svg_source_hidden],
     ).then(
         fn=build_history_html,
@@ -919,7 +869,7 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
 
     clear_btn.click(
         on_clear,
-        outputs=[image_input, metadata_output, palette_output,
+        outputs=[image_input, palette_output,
                  palette_export, comparison_slider, svg_download, png_download, svg_source_hidden],
     ).then(
         fn=build_history_html,
