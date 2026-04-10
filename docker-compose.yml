@@ -1,0 +1,13 @@
+services:
+  neroued-vectorizer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: neroued-vectorizer
+    ports:
+      - "7861:7861"
+    restart: unless-stopped
+    environment:
+      - NV_DLL_DIR=/usr/local/lib  # Windows DLL path hint (no-op on Linux)
+    volumes:
+      - ./gradio_app.py:/app/gradio_app.py:ro
