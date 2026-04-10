@@ -122,23 +122,6 @@ async function copySvgNow() {
 
 # ── SVG Helpers ───────────────────────────────────────────────────────────────
 
-def parse_svg_color_stats(svg_content: str) -> dict[str, dict]:
-    """Parse SVG and return per-color path count and percentage."""
-    fill_counts: dict[str, int] = {}
-    path_pattern = re.compile(
-        r'<(?P<tag>path|rect|circle|ellipse|polygon|polyline)\b[^>]*\bfill="(?P<color>#[a-fA-F0-9]+)"',
-        re.IGNORECASE
-    )
-    for m in path_pattern.finditer(svg_content):
-        color = m.group('color').lower()
-        fill_counts[color] = fill_counts.get(color, 0) + 1
-    total = sum(fill_counts.values()) or 1
-    return {
-        color: {'count': count, 'pct': round(count / total * 100, 1)}
-        for color, count in fill_counts.items()
-    }
-
-
 def render_svg_to_png_bytes(svg_content: str, width: int, height: int) -> bytes:
     """Render SVG content to PNG bytes using cairosvg."""
     return cairosvg.svg2png(
@@ -146,58 +129,6 @@ def render_svg_to_png_bytes(svg_content: str, width: int, height: int) -> bytes:
         output_width=width,
         output_height=height,
     )
-
-
-def build_enhanced_palette_html(
-    svg_content: str,
-    palette: list,
-) -> str:
-    """Build interactive palette HTML with usage % and hover highlight."""
-    stats = parse_svg_color_stats(svg_content)
-    swatches = []
-    for i, color in enumerate(palette):
-        r255 = int(round(color.r * 255))
-        g255 = int(round(color.g * 255))
-        b255 = int(round(color.b * 255))
-        hex_color = f"#{r255:02x}{g255:02x}{b255:02x}"
-        stat = stats.get(hex_color.lower(), {'count': 0, 'pct': 0.0})
-        text_color = "#fff" if (r255 * 0.299 + g255 * 0.587 + b255 * 0.114) < 150 else "#000"
-        swatches.append(
-            f'<div class="palette-swatch" '
-            f'data-color="{hex_color}" '
-            f'onmouseover="highlightSvgColor(\'{hex_color}\', true)" '
-            f'onmouseout="highlightSvgColor(\'{hex_color}\', false)" '
-            f'style="display:inline-flex;flex-direction:column;align-items:center;'
-            f'margin:4px;cursor:pointer;" '
-            f'title="{hex_color} — {stat["count"]} shapes ({stat["pct"]}%)">'
-            f'<div style="width:52px;height:52px;background:{hex_color};'
-            f'border:2px solid transparent;border-radius:8px;'
-            f'box-shadow:0 2px 8px rgba(0,0,0,0.35);'
-            f'transition:border-color 0.15s,transform 0.15s;" '
-            f'onmouseover="this.style.borderColor=\'#3b82f6\';this.style.transform=\'scale(1.12)\'" '
-            f'onmouseout="this.style.borderColor=\'transparent\';this.style.transform=\'scale(1)\'">'
-            f'<span style="display:block;padding-top:16px;font-size:12px;'
-            f'font-weight:bold;color:{text_color};font-family:monospace;">{i+1}</span></div>'
-            f'<span style="font-size:10px;color:#666;margin-top:3px;font-family:monospace;">'
-            f'{stat["pct"]}%</span></div>'
-        )
-    return (
-        f'<div id="palette-container" style="display:flex;flex-wrap:wrap;gap:2px;padding:4px 0;">'
-        + ''.join(swatches)
-        + '</div>'
-    )
-
-
-def build_palette_export_css(palette: list) -> str:
-    """Export palette as CSS variables."""
-    lines = [":root {"]
-    for i, color in enumerate(palette):
-        r255 = int(round(color.r * 255))
-        g255 = int(round(color.g * 255))
-        b255 = int(round(color.b * 255))
-        lines.append(f"  --color-{i+1}: #{r255:02x}{g255:02x}{b255:02x};")
-    lines.append("}")
-    return "\n".join(lines)
 
 
 # ── File info on upload ───────────────────────────────────────────────────────
@@ -280,12 +211,7 @@ def vectorize_image_gen(
     result = nv.vectorize(image_file, config)
     yield None
 
-    # Stage 3: build palette
-    palette_html = build_enhanced_palette_html(result.svg_content, result.palette)
-    palette_css = build_palette_export_css(result.palette)
-    yield None
-
-    # Stage 4: render PNG preview
+    # Stage 3: render PNG preview
     png_bytes = None
     try:
         png_bytes = render_svg_to_png_bytes(result.svg_content, result.width, result.height)
@@ -296,8 +222,6 @@ def vectorize_image_gen(
     # Done
     yield (
         result.svg_content,
-        palette_html,
-        palette_css,
         png_bytes,
         image_file,
     )
@@ -331,9 +255,6 @@ def vectorize_image(
 
     result = nv.vectorize(image_file, config)
 
-    palette_html = build_enhanced_palette_html(result.svg_content, result.palette)
-    palette_css = build_palette_export_css(result.palette)
-
     png_bytes = None
     try:
         png_bytes = render_svg_to_png_bytes(result.svg_content, result.width, result.height)
@@ -342,8 +263,6 @@ def vectorize_image(
 
     return (
         result.svg_content,
-        palette_html,
-        palette_css,
         png_bytes,
         image_file,
     )
@@ -354,14 +273,6 @@ def vectorize_image(
 BLOCK_TITLE = "neroued 矢量化器"
 DESCRIPTION = (
     "高质量栅格转 SVG 矢量化工具。上传图片、调整参数，点击矢量化即可生成 SVG。"
-)
-
-PALETTE_PLACEHOLDER = (
-    '<div style="color:#aaa;font-size:14px;padding:8px;">调色板将在矢量化后显示</div>'
-)
-
-CSS_PLACEHOLDER = (
-    '<div style="color:#aaa;font-size:13px;font-family:monospace;padding:8px;">CSS 变量将在此处显示</div>'
 )
 
 PRESETS = {
@@ -429,14 +340,6 @@ body, body.gradio-mode {
 /* Slider track styling */
 input[type="range"] {
     accent-color: var(--primary) !important;
-}
-
-/* Palette swatches */
-.palette-swatch {
-    transition: transform 0.15s;
-}
-.palette-swatch:hover {
-    transform: translateY(-2px);
 }
 
 /* Download buttons */
@@ -540,15 +443,6 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
     )
 
     gr.Markdown('<p class="section-header">📊 结果</p>')
-
-    gr.Markdown("#### 🎨 调色板")
-    palette_output = gr.HTML(value=PALETTE_PLACEHOLDER)
-    palette_export = gr.Code(
-        value="",
-        language="css",
-        label="CSS 变量",
-        lines=5,
-    )
 
     gr.Markdown("#### 💾 导出")
     with gr.Row():
@@ -693,16 +587,14 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
         if image_file is None:
             gr.Info("请先上传一张图片。")
             return (
-                [gr.no_update(), "", PALETTE_PLACEHOLDER, "",
-                 None, None, CSS_PLACEHOLDER, None]
+                [gr.no_update(), None, None, None]
             )
 
         file_size = Path(image_file).stat().st_size
         if file_size > 50 * 1024 * 1024:
             gr.Info(f"文件过大（{file_size / 1024 / 1024:.1f} MB）。限制为 50 MB。")
             return (
-                [gr.no_update(), "", PALETTE_PLACEHOLDER, "",
-                 None, None, CSS_PLACEHOLDER, None]
+                [gr.no_update(), None, None, None]
             )
 
         params = {
@@ -736,8 +628,7 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
             if result is None:
                 raise RuntimeError("矢量化未返回结果")
 
-            (svg_content, palette_html,
-             palette_css, png_bytes,
+            (svg_content, png_bytes,
              original_image) = result
 
             if png_bytes is not None:
@@ -786,15 +677,13 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
             _session_history.append({"label": label, "params": params})
 
             return (
-                [comparison_value, palette_html, palette_css,
-                 svg_path, png_path, svg_content]
+                [comparison_value, svg_path, png_path, svg_content]
             )
 
         except Exception as exc:
             gr.Warning(f"矢量化失败：{exc}")
             return (
-                [gr.no_update(), PALETTE_PLACEHOLDER, "",
-                 None, None, CSS_PLACEHOLDER, None]
+                [gr.no_update(), None, None, None]
             )
 
     def build_history_html() -> str:
@@ -819,8 +708,7 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
         global _session_history
         _session_history = []
         return (
-            [None, PALETTE_PLACEHOLDER, "",
-             None, None, CSS_PLACEHOLDER, None]
+            [None, None, None, None]
         )
 
     def on_history_select(history_index: int):
@@ -859,8 +747,7 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
                 corner_angle_threshold, smoothness, smoothing_spatial,
                 smoothing_color, upscale_short_edge, max_working_pixels,
                 enable_subpixel_refine],
-        outputs=[comparison_slider, palette_output, palette_export,
-                 svg_download, png_download, svg_source_hidden],
+        outputs=[comparison_slider, svg_download, png_download, svg_source_hidden],
     ).then(
         fn=build_history_html,
         inputs=None,
@@ -869,8 +756,7 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
 
     clear_btn.click(
         on_clear,
-        outputs=[image_input, palette_output,
-                 palette_export, comparison_slider, svg_download, png_download, svg_source_hidden],
+        outputs=[image_input, comparison_slider, svg_download, png_download, svg_source_hidden],
     ).then(
         fn=build_history_html,
         inputs=None,
