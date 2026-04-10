@@ -1,4 +1,4 @@
-"""Gradio Web UI for neroued-vectorizer service — visual & responsive overhaul."""
+"""Gradio Web UI for neroued-vectorizer service — Phase 1 complete refactor."""
 
 from __future__ import annotations
 import io
@@ -16,7 +16,11 @@ import neroued_vectorizer as nv
 # ── Module-level session history (survives across event calls) ────────────────
 _session_history: list[dict] = []
 
-# ── SVG Preview JavaScript ───────────────────────────────────────────────────
+# ── Module-level UI state ─────────────────────────────────────────────────────
+# 'idle' | 'uploaded' | 'loading' | 'result'
+_ui_state: str = "idle"
+
+# ── SVG Preview JavaScript ────────────────────────────────────────────────────
 
 SVG_PREVIEW_JS = """
 <script>
@@ -50,7 +54,6 @@ function resetSvgHighlight() {
     });
 }
 
-// ── Save / load custom presets via localStorage ────────────────────────────
 function saveCustomPreset(name, vals) {
     try {
         var raw = localStorage.getItem('neroued-presets') || '{}';
@@ -131,10 +134,16 @@ def render_svg_to_png_bytes(svg_content: str, width: int, height: int) -> bytes:
     )
 
 
-# ── File info on upload ───────────────────────────────────────────────────────
+def svg_to_data_uri(svg_content: str) -> str:
+    """Convert SVG content to a data URI for use in <img src>."""
+    encoded = svg_content.replace('"', '&quot;').replace('<', '&lt;').replace('>', '&gt;')
+    return f"data:image/svg+xml,{encoded}"
+
+
+# ── File info (simplified — dimensions + file size only) ──────────────────────
 
 def build_file_info_html(image_file: str | None) -> str:
-    """Build HTML showing image dimensions, file size, and mode."""
+    """Build HTML showing image dimensions and file size only."""
     if image_file is None:
         return (
             '<div style="color:#9090b0;font-size:12px;font-family:monospace;padding:4px 0;">'
@@ -150,10 +159,6 @@ def build_file_info_html(image_file: str | None) -> str:
 
         with Image.open(image_file) as img:
             width, height = img.size
-            mode = img.mode
-
-        mode_map = {"RGB": "彩色 (RGB)", "RGBA": "彩色+透明 (RGBA)", "L": "灰度 (L)", "1": "黑白 (1-bit)", "P": "调色板 (P)"}
-        mode_label = mode_map.get(mode, f"{mode}")
 
         return (
             f'<div style="display:flex;gap:16px;flex-wrap:wrap;padding:6px 0;">'
@@ -161,8 +166,6 @@ def build_file_info_html(image_file: str | None) -> str:
             f'📐 {width} × {height} px</span>'
             f'<span style="color:#9090b0;font-size:12px;font-family:monospace;">'
             f'💾 {size_str}</span>'
-            f'<span style="color:#9090b0;font-size:12px;font-family:monospace;">'
-            f'🎨 {mode_label}</span>'
             f'</div>'
         )
     except Exception as e:
@@ -187,11 +190,7 @@ def vectorize_image_gen(
     max_working_pixels: int,
     enable_subpixel_refine: bool,
 ):
-    """Generator: vectorize with per-stage progress yields.
-
-    Yields None placeholders for each stage; the caller consumes them
-    to drive Gradio's progress bar via show_progress="full".
-    """
+    """Generator: vectorize with per-stage progress yields."""
 
     # Stage 1: configure
     config = nv.VectorizerConfig()
@@ -239,7 +238,7 @@ def vectorize_image(
     upscale_short_edge: int,
     max_working_pixels: int,
     enable_subpixel_refine: bool,
-) -> tuple[str, str, str, str, bytes | None, str]:
+) -> tuple[str, str, str]:
     """Vectorize an image (sync version, no progress)."""
     config = nv.VectorizerConfig()
     config.num_colors = num_colors
@@ -275,6 +274,7 @@ DESCRIPTION = (
     "高质量栅格转 SVG 矢量化工具。上传图片、调整参数，点击矢量化即可生成 SVG。"
 )
 
+# 插画预设作为默认值
 PRESETS = {
     "照片": {
         "label": "照片",
@@ -295,6 +295,9 @@ PRESETS = {
         "params": (4, 5, 0.5, 120.0, 0.8, 5.0, 5.0, 0, 2000000, False),
     },
 }
+
+# Default preset values (插画)
+_DEFAULT_PARAMS = PRESETS["插画"]["params"]
 
 # ── Custom CSS ─────────────────────────────────────────────────────────────────
 
@@ -326,6 +329,72 @@ body, body.gradio-mode {
     margin: 0 0 8px 0;
 }
 
+/* Preview area wrapper — holds upload zone + overlays */
+.preview-wrapper {
+    position: relative;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+}
+
+/* Clear button positioned top-right of preview */
+.clear-btn-wrapper {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 10;
+}
+
+/* Loading overlay */
+.loading-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(30, 30, 46, 0.85);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 20;
+    border-radius: 12px;
+}
+
+.loading-spinner {
+    width: 48px;
+    height: 48px;
+    border: 4px solid var(--border);
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-bottom: 12px;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.loading-text {
+    color: var(--text-muted);
+    font-size: 13px;
+    font-family: monospace;
+}
+
+/* Result SVG display */
+.result-display {
+    border-radius: 12px;
+    overflow: hidden;
+    min-height: 200px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--surface-2);
+}
+
+.result-display img {
+    max-width: 100%;
+    max-height: 500px;
+    object-fit: contain;
+}
+
 /* Parameter accordion */
 .param-section .gr-accordion-header {
     background: var(--surface-2) !important;
@@ -353,13 +422,6 @@ input[type="range"] {
 .download-btn:hover {
     background: var(--primary) !important;
     border-color: var(--primary-hover) !important;
-}
-
-/* Comparison slider container */
-comparison-container {
-    border-radius: 12px;
-    overflow: hidden;
-    border: 1px solid var(--border);
 }
 
 /* Hide default gradio section headers */
@@ -412,29 +474,81 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
 
     with gr.Group():
         gr.Markdown('<p class="section-header">📤 上传图片</p>')
-        image_input = gr.Image(
-            label="",
-            type="filepath",
-            height=320,
-        )
 
-        # File info display (updated on upload)
+        # Preview area — single container with state-dependent content
+        with gr.Group():
+            # Primary upload/preview zone (gr.Image shows upload box when value=None)
+            upload_zone = gr.Image(
+                label="",
+                type="filepath",
+                height=320,
+            )
+
+            # Clear button — top-right of preview area, shown after upload
+            clear_btn = gr.Button(
+                "✕",
+                size="sm",
+                elem_classes=["clear-btn-wrapper"],
+            )
+
+            # Loading indicator — shown during vectorization
+            loading_indicator = gr.HTML(
+                value=(
+                    '<div class="loading-overlay">'
+                    '<div class="loading-spinner"></div>'
+                    '<div class="loading-text">正在矢量化，请稍候…</div>'
+                    '</div>'
+                ),
+                visible=False,
+            )
+
+            # Result SVG display — shown after vectorization completes
+            result_display = gr.HTML(
+                visible=False,
+                elem_classes=["result-display"],
+            )
+
+        # File info display (updated on upload / result)
         file_info_output = gr.HTML(
             value='<div style="color:#9090b0;font-size:12px;font-family:monospace;padding:4px 0;">'
                   '未上传图片</div>',
             elem_id="file-info-display",
         )
 
-        with gr.Row():
-            vectorize_btn = gr.Button("✨ 矢量化", variant="primary", size="lg")
-            clear_btn = gr.Button("🗑 清空", size="lg")
+        # Preset selector — visible, defaults to 插画
+        gr.Markdown('<p class="section-header">⚡ 预设</p>')
+        preset_choices = {
+            "照片 (📷 适合人像、风景)": "照片",
+            "插画 (🎨 适合动漫、游戏原画)": "插画",
+            "线稿 (✏️ 适合黑白线条、图标)": "线稿",
+        }
+        preset_radio = gr.Radio(
+            choices=list(preset_choices.keys()),
+            value="插画 (🎨 适合动漫、游戏原画)",  # Default to 插画
+            label="",
+            info="选择一个预设快速填充参数，或手动调整下方滑块",
+            elem_id="preset-radio",
+        )
 
-    gr.Markdown('<p class="section-header">🔍 效果对比</p>')
-    comparison_slider = gr.ImageSlider(
-        label="拖动滑块 — 左侧：原图  |  右侧：矢量结果",
-        slider_position=50,
-        height=400,
-    )
+        # Vectorize button
+        vectorize_btn = gr.Button(
+            "✨ 矢量化",
+            variant="primary",
+            size="lg",
+        )
+
+        # Download area — replaces vectorize button after completion
+        with gr.Group(visible=False) as download_area:
+            gr.Markdown("#### 💾 导出")
+            with gr.Row():
+                svg_download = gr.File(label="下载 SVG")
+                png_download = gr.File(label="下载 PNG")
+            with gr.Row():
+                copy_svg_btn = gr.Button(
+                    "📋 复制 SVG 源码",
+                    size="sm",
+                    elem_id="copy-svg-btn",
+                )
 
     # Hidden SVG source for JS copy
     svg_source_hidden = gr.Textbox(
@@ -442,61 +556,30 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
         elem_id="svg-source-hidden",
     )
 
-    gr.Markdown('<p class="section-header">📊 结果</p>')
-
-    gr.Markdown("#### 💾 导出")
-    with gr.Row():
-        svg_download = gr.File(label="下载 SVG")
-        png_download = gr.File(label="下载 PNG")
-
-    with gr.Row():
-        copy_svg_btn = gr.Button(
-            "📋 复制 SVG 源码",
-            size="sm",
-            elem_id="copy-svg-btn",
-        )
-
     # ═══════════════════════════════════════════════════════════════════════
-    # GROUP 2 — Collapsed: preset radio + all parameter sliders in one accordion
+    # GROUP 2 — Collapsed: all parameter sliders
     # ═══════════════════════════════════════════════════════════════════════
 
     with gr.Group(elem_classes=["param-section"]):
         with gr.Accordion("⚙️ 参数配置", open=False, elem_classes=["param-accordion"]):
-            # ── Preset selection (native Gradio Radio) ──────────────────────
-            gr.Markdown('<p class="section-header">⚡ 预设</p>')
-            preset_choices = {
-                "照片 (📷 适合人像、风景)": "照片",
-                "插画 (🎨 适合动漫、游戏原画)": "插画",
-                "线稿 (✏️ 适合黑白线条、图标)": "线稿",
-            }
-            preset_radio = gr.Radio(
-                choices=list(preset_choices.keys()),
-                value=None,
-                label="",
-                info="选择一个预设以快速填充参数，或手动调整下方滑块",
-                elem_id="preset-radio",
-            )
 
-            gr.Markdown("---")
-
-            # ── All parameter sliders in one accordion ─────────────────────
             gr.Markdown('<p class="section-header">🎨 色彩与区域</p>')
             num_colors = gr.Slider(
                 label="颜色数量（0 = 自动）",
                 info="输出 SVG 中的最大颜色数。设为 0 则由算法自动判断适合的数量。",
-                minimum=0, maximum=256, value=0, step=1,
+                minimum=0, maximum=256, value=_DEFAULT_PARAMS[0], step=1,
                 elem_id="num-colors-slider",
             )
             min_region_area = gr.Slider(
                 label="最小区域面积（px²）",
                 info="小于此面积的色块会被忽略并合并到周围区域。可去除噪点。",
-                minimum=0, maximum=500, value=0, step=1,
+                minimum=0, maximum=500, value=_DEFAULT_PARAMS[1], step=1,
                 elem_id="min-region-slider",
             )
             enable_subpixel_refine = gr.Checkbox(
                 label="启用亚像素细化",
                 info="在像素级别优化边缘，减少锯齿和色差。略微增加处理时间。",
-                value=True,
+                value=_DEFAULT_PARAMS[9],
                 elem_id="subpixel-checkbox",
             )
 
@@ -504,19 +587,19 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
             curve_fit_error = gr.Slider(
                 label="曲线拟合误差（px）",
                 info="允许的曲线与原始边缘最大偏差（像素）。越大曲线越平滑简洁，越小越接近原始形状。",
-                minimum=0.1, maximum=10.0, value=1.0, step=0.1,
+                minimum=0.1, maximum=10.0, value=_DEFAULT_PARAMS[2], step=0.1,
                 elem_id="curve-error-slider",
             )
             corner_angle_threshold = gr.Slider(
                 label="拐角角度阈值（°）",
                 info="小于此角度的角点会被当作尖角保留；越大越容易将尖锐转角变成圆弧。",
-                minimum=1.0, maximum=180.0, value=60.0, step=1.0,
+                minimum=1.0, maximum=180.0, value=_DEFAULT_PARAMS[3], step=1.0,
                 elem_id="corner-angle-slider",
             )
             smoothness = gr.Slider(
                 label="平滑度 [0, 1]",
                 info="贝塞尔曲线平滑系数。0 保持原始锯齿，1 最平滑但可能失真。",
-                minimum=0.0, maximum=1.0, value=0.3, step=0.01,
+                minimum=0.0, maximum=1.0, value=_DEFAULT_PARAMS[4], step=0.01,
                 elem_id="smoothness-slider",
             )
 
@@ -524,25 +607,25 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
             smoothing_spatial = gr.Slider(
                 label="平滑空间半径",
                 info="空间高斯模糊的半径（像素）。值越大颜色过渡越柔和。",
-                minimum=0.0, maximum=50.0, value=10.0, step=0.5,
+                minimum=0.0, maximum=50.0, value=_DEFAULT_PARAMS[5], step=0.5,
                 elem_id="smooth-spatial-slider",
             )
             smoothing_color = gr.Slider(
                 label="平滑色彩半径",
                 info="色彩空间高斯模糊半径。值越大相近颜色越容易融合。",
-                minimum=0.0, maximum=50.0, value=10.0, step=0.5,
+                minimum=0.0, maximum=50.0, value=_DEFAULT_PARAMS[6], step=0.5,
                 elem_id="smooth-color-slider",
             )
             upscale_short_edge = gr.Slider(
                 label="放大短边（0 = 关闭）",
                 info="在处理前先将图片短边放大到此像素值再矢量化。可提升小图的细节保留。",
-                minimum=0, maximum=2000, value=0, step=1,
+                minimum=0, maximum=2000, value=_DEFAULT_PARAMS[7], step=1,
                 elem_id="upscale-slider",
             )
             max_working_pixels = gr.Slider(
                 label="最大处理像素（0 = 关闭）",
                 info="处理过程中工作区的最大像素数。超过则等比缩小。可防止内存溢出。",
-                minimum=0, maximum=50000000, value=4000000, step=100000,
+                minimum=0, maximum=50000000, value=_DEFAULT_PARAMS[8], step=100000,
                 elem_id="max-pixels-slider",
             )
 
@@ -568,13 +651,33 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
             return [gr.update(value=v) for v in vals]
         return [gr.no_update()] * 10
 
-    # Preset JS — simplified (preset card functions removed, now using native Gradio Radio)
+    # Preset JS — simplified
     preset_js = ""
 
 
     def on_upload(image_file):
-        """Update file info display when an image is uploaded."""
-        return build_file_info_html(image_file)
+        """Update file info and switch preview to 'uploaded' state."""
+        return (
+            build_file_info_html(image_file),
+            gr.update(visible=True),   # clear_btn
+            gr.update(visible=False),   # loading_indicator
+            gr.update(visible=False),   # result_display
+        )
+
+
+    def on_clear():
+        """Reset to idle state — show upload box, hide overlays."""
+        global _session_history
+        _session_history = []
+        return (
+            None,                       # upload_zone value (None = show upload box)
+            gr.update(visible=False),   # clear_btn
+            gr.update(visible=False),   # loading_indicator
+            gr.update(visible=False),   # result_display
+            '<div style="color:#9090b0;font-size:12px;font-family:monospace;padding:4px 0;">未上传图片</div>',
+            gr.update(visible=False),   # download_area
+        )
+
 
     def on_vectorize(
         image_file, num_colors, min_region_area, curve_fit_error,
@@ -586,16 +689,12 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
 
         if image_file is None:
             gr.Info("请先上传一张图片。")
-            return (
-                [gr.no_update(), None, None, None]
-            )
+            return [gr.no_update()] * 6
 
         file_size = Path(image_file).stat().st_size
         if file_size > 50 * 1024 * 1024:
             gr.Info(f"文件过大（{file_size / 1024 / 1024:.1f} MB）。限制为 50 MB。")
-            return (
-                [gr.no_update(), None, None, None]
-            )
+            return [gr.no_update()] * 6
 
         params = {
             "num_colors": num_colors,
@@ -611,7 +710,6 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
         }
 
         try:
-            # Iterate through generator (each yield updates the Gradio progress bar)
             gen = vectorize_image_gen(
                 image_file, num_colors, min_region_area, curve_fit_error,
                 corner_angle_threshold, smoothness, smoothing_spatial,
@@ -619,7 +717,6 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
                 enable_subpixel_refine,
             )
 
-            # Consume all intermediate None yields (progress updates)
             result = None
             for step in gen:
                 if step is not None:
@@ -628,9 +725,10 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
             if result is None:
                 raise RuntimeError("矢量化未返回结果")
 
-            (svg_content, png_bytes,
-             original_image) = result
+            (svg_content, png_bytes, original_image) = result
 
+            # Save PNG preview
+            png_path = None
             if png_bytes is not None:
                 svg_png_tmpdir = Path(tempfile.gettempdir()) / "neroued-vectorizer"
                 svg_png_tmpdir.mkdir(exist_ok=True)
@@ -648,9 +746,8 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
                 png_tmp.write(png_bytes)
                 png_tmp.close()
                 png_path = png_tmp.name
-            else:
-                png_path = None
 
+            # Save SVG
             svg_tmpdir = Path(tempfile.gettempdir()) / "neroued-vectorizer"
             svg_tmpdir.mkdir(exist_ok=True)
             if not hasattr(on_vectorize, "_svg_cleanup_done"):
@@ -667,27 +764,39 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
                 f.write(svg_content)
                 svg_path = f.name
 
-            if png_path and original_image:
-                comparison_value = (original_image, png_path)
-            else:
-                comparison_value = None
+            # Build result SVG HTML
+            svg_data_uri = svg_to_data_uri(svg_content)
+            result_html = (
+                f'<div style="display:flex;align-items:center;justify-content:center;'
+                f'background:var(--surface-2);border-radius:12px;min-height:200px;'
+                f'max-height:500px;overflow:hidden;">'
+                f'<img src="{svg_data_uri}" style="max-width:100%;max-height:500px;object-fit:contain;" />'
+                f'</div>'
+            )
 
-            # Build history entry
+            # History
             label = f"#{len(_session_history)+1} {num_colors}色"
             _session_history.append({"label": label, "params": params})
 
             return (
-                [comparison_value, svg_path, png_path, svg_content]
+                gr.update(visible=False),          # upload_zone (hide)
+                gr.update(visible=True),            # clear_btn
+                gr.update(visible=False),          # loading_indicator
+                gr.update(visible=True, value=result_html),  # result_display
+                build_file_info_html(image_file),  # file_info_output
+                gr.update(visible=True),            # download_area
+                svg_path,                           # svg_download
+                png_path,                           # png_download
+                svg_content,                        # svg_source_hidden
             )
 
         except Exception as exc:
             gr.Warning(f"矢量化失败：{exc}")
-            return (
-                [gr.no_update(), None, None, None]
-            )
+            return [gr.no_update()] * 9
+
 
     def build_history_html() -> str:
-        """Build clickable HTML list of history entries (reads module-level _session_history)."""
+        """Build clickable HTML list of history entries."""
         global _session_history
         if not _session_history:
             return '<div style="color:#9090b0;font-size:12px;padding:4px 0;">尚无历史记录</div>'
@@ -704,12 +813,6 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
             )
         return "\n".join(items)
 
-    def on_clear():
-        global _session_history
-        _session_history = []
-        return (
-            [None, None, None, None]
-        )
 
     def on_history_select(history_index: int):
         """Load parameters from a history entry back into the sliders."""
@@ -731,6 +834,7 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
             gr.update(value=p["enable_subpixel_refine"]),
         ]
 
+
     def on_preset_radio_change(preset_key: str | None):
         """When user selects a preset from the Radio, update all parameter sliders."""
         if preset_key is None:
@@ -740,34 +844,45 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
         vals = PRESETS[preset_key]["params"]
         return [gr.update(value=v) for v in vals]
 
+
+    # Upload → file info + preview state
+    upload_zone.upload(
+        on_upload,
+        inputs=[upload_zone],
+        outputs=[file_info_output, clear_btn, loading_indicator, result_display],
+    )
+
+    # Upload → also triggered on change (e.g. paste)
+    upload_zone.change(
+        on_upload,
+        inputs=[upload_zone],
+        outputs=[file_info_output, clear_btn, loading_indicator, result_display],
+    )
+
+    # Clear button → reset everything
+    clear_btn.click(
+        on_clear,
+        outputs=[upload_zone, clear_btn, loading_indicator, result_display,
+                 file_info_output, download_area],
+    )
+
     # Main vectorize event
     vectorize_btn.click(
         on_vectorize,
-        inputs=[image_input, num_colors, min_region_area, curve_fit_error,
+        inputs=[upload_zone, num_colors, min_region_area, curve_fit_error,
                 corner_angle_threshold, smoothness, smoothing_spatial,
                 smoothing_color, upscale_short_edge, max_working_pixels,
                 enable_subpixel_refine],
-        outputs=[comparison_slider, svg_download, png_download, svg_source_hidden],
+        outputs=[
+            upload_zone, clear_btn, loading_indicator, result_display,
+            file_info_output, download_area,
+            svg_download, png_download, svg_source_hidden,
+        ],
+        show_progress="minimal",
     ).then(
         fn=build_history_html,
         inputs=None,
         outputs=[history_output],
-    )
-
-    clear_btn.click(
-        on_clear,
-        outputs=[image_input, comparison_slider, svg_download, png_download, svg_source_hidden],
-    ).then(
-        fn=build_history_html,
-        inputs=None,
-        outputs=[history_output],
-    )
-
-    # Upload → file info
-    image_input.upload(
-        on_upload,
-        inputs=[image_input],
-        outputs=[file_info_output],
     )
 
     # Preset radio → update all sliders
@@ -803,10 +918,8 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
     history_js = """
     <script>
     function loadHistory(idx) {
-        // Write the clicked history index to the hidden Number field
         var inp = document.querySelector('input[type="number"][aria-label=""]');
         if (!inp) return;
-        // Gradio stores the hidden number in a zero-sized input
         var allInputs = document.querySelectorAll('input[type="number"]');
         for (var i = 0; i < allInputs.length; i++) {
             if (allInputs[i].offsetParent === null || allInputs[i].style.display === 'none') {
