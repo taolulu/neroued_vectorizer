@@ -444,6 +444,20 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
     gr.Markdown(DESCRIPTION)
 
     # ═══════════════════════════════════════════════════════════════════════
+    # Preset selector — above image area
+    # ═══════════════════════════════════════════════════════════════════════
+    preset_radio = gr.Radio(
+        choices=[
+            "📷 照片 — 人像/风景",
+            "🎨 插画 — 动漫/游戏原画",
+            "✏️ 线稿 — 黑白线条/图标",
+        ],
+        value="🎨 插画 — 动漫/游戏原画",
+        label="",
+        elem_id="preset-radio",
+    )
+
+    # ═══════════════════════════════════════════════════════════════════════
     # GROUP 1 — Always expanded: upload, vectorize, preview, download
     # ═══════════════════════════════════════════════════════════════════════
 
@@ -488,16 +502,6 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
             value='<div style="color:#9090b0;font-size:12px;font-family:monospace;padding:4px 0;">'
                   '未上传图片</div>',
             elem_id="file-info-display",
-        )
-
-        # Preset selector — visible, defaults to 插画
-        gr.Markdown('<p class="section-header">⚡ 预设</p>')
-        preset_radio = gr.Radio(
-            choices=["照片", "插画", "线稿"],
-            value="插画",
-            label="",
-            info="📷 照片：人像/风景 | 🎨 插画：动漫/游戏原画 | ✏️ 线稿：黑白线条/图标",
-            elem_id="preset-radio",
         )
 
         # Action area — vectorize button and download area share the same visual slot
@@ -612,15 +616,24 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
 
     # ── Event handlers ───────────────────────────────────────────────────────
 
-    def _apply_preset(preset_name: str):
+    # Preset radio choices map to PRESETS keys
+    _PRESET_KEY_MAP = {
+        "📷 照片 — 人像/风景": "照片",
+        "🎨 插画 — 动漫/游戏原画": "插画",
+        "✏️ 线稿 — 黑白线条/图标": "线稿",
+    }
+
+    def _get_preset_key(choice: str | None) -> str | None:
+        """Extract PRESETS key from radio choice string."""
+        if choice is None:
+            return None
+        return _PRESET_KEY_MAP.get(choice)
+
+    def _apply_preset(preset_choice: str | None):
         """Return updated values for all parameter components from preset."""
-        preset_map = {
-            "照片": PRESETS["照片"]["params"],
-            "插画": PRESETS["插画"]["params"],
-            "线稿": PRESETS["线稿"]["params"],
-        }
-        if preset_name in preset_map:
-            vals = preset_map[preset_name]
+        key = _get_preset_key(preset_choice)
+        if key and key in PRESETS:
+            vals = PRESETS[key]["params"]
             return [gr.update(value=v) for v in vals]
         return [gr.no_update()] * 10
 
@@ -829,15 +842,16 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
         return param_updates + [gr.no_update()] * 4
 
 
-    def on_preset_radio_change(preset_key: str | None):
+    def on_preset_radio_change(preset_choice: str | None):
         """When user selects a preset from the Radio, update all parameter sliders.
 
         If a vectorization result is currently displayed, also reset to 'uploaded'
         state so the user knows they need to re-vectorize with the new preset.
         """
-        if preset_key is None or preset_key not in PRESETS:
+        key = _get_preset_key(preset_choice)
+        if key is None or key not in PRESETS:
             return [gr.no_update()] * 14
-        vals = PRESETS[preset_key]["params"]
+        vals = PRESETS[key]["params"]
         param_updates = [gr.update(value=v) for v in vals]
 
         global _has_result
