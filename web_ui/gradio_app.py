@@ -454,6 +454,7 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
         ],
         value="🎨 插画 — 动漫/游戏原画",
         label="",
+        show_label=False,
         elem_id="preset-radio",
     )
 
