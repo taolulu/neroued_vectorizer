@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import re
 import tempfile
+import urllib.parse
 from pathlib import Path
 
 from PIL import Image
@@ -152,9 +153,14 @@ def render_svg_to_png_bytes(svg_content: str, width: int, height: int) -> bytes:
 
 
 def svg_to_data_uri(svg_content: str) -> str:
-    """Convert SVG content to a data URI for use in <img src>."""
-    encoded = svg_content.replace('"', '&quot;').replace('<', '&lt;').replace('>', '&gt;')
-    return f"data:image/svg+xml,{encoded}"
+    """Convert SVG content to a data URI for use in <img src>.
+    
+    Uses percent-encoding (RFC 2397) to safely embed SVG in a data URI.
+    HTML entity encoding is insufficient because '#' in hex colors
+    (e.g. fill="#ff0000") is interpreted as a URL fragment delimiter,
+    which truncates the SVG content.
+    """
+    return f"data:image/svg+xml,{urllib.parse.quote(svg_content, safe='')}"
 
 
 # ── File info (simplified — dimensions + file size only) ──────────────────────
