@@ -15,6 +15,7 @@ import neroued_vectorizer as nv
 
 # ── Module-level session history (survives across event calls) ────────────────
 _session_history: list[dict] = []
+_has_result: bool = False  # True when a vectorization result is displayed
 
 # ── SVG Preview JavaScript ────────────────────────────────────────────────────
 
@@ -119,6 +120,26 @@ async function copySvgNow() {
 </script>
 """
 
+# ── Temp file helpers ─────────────────────────────────────────────────────────
+
+_VECTORIZER_TMPDIR = Path(tempfile.gettempdir()) / "neroued-vectorizer"
+_tmpdir_cleaned = False
+
+
+def _ensure_tmpdir() -> Path:
+    """Return the shared temp directory, cleaning old files on first use."""
+    global _tmpdir_cleaned
+    _VECTORIZER_TMPDIR.mkdir(exist_ok=True)
+    if not _tmpdir_cleaned:
+        for f in _VECTORIZER_TMPDIR.glob("*"):
+            try:
+                f.unlink()
+            except OSError:
+                pass
+        _tmpdir_cleaned = True
+    return _VECTORIZER_TMPDIR
+
+
 # ── SVG Helpers ───────────────────────────────────────────────────────────────
 
 def render_svg_to_png_bytes(svg_content: str, width: int, height: int) -> bytes:
@@ -171,55 +192,7 @@ def build_file_info_html(image_file: str | None) -> str:
         )
 
 
-# ── Vectorization (with progress) ───────────────────────────────────────────
-
-def vectorize_image_gen(
-    image_file: str | bytes,
-    num_colors: int,
-    min_region_area: int,
-    curve_fit_error: float,
-    corner_angle_threshold: float,
-    smoothness: float,
-    smoothing_spatial: float,
-    smoothing_color: float,
-    upscale_short_edge: int,
-    max_working_pixels: int,
-    enable_subpixel_refine: bool,
-):
-    """Generator: vectorize with per-stage progress yields."""
-
-    # Stage 1: configure
-    config = nv.VectorizerConfig()
-    config.num_colors = num_colors
-    config.min_region_area = min_region_area
-    config.curve_fit_error = curve_fit_error
-    config.corner_angle_threshold = corner_angle_threshold
-    config.smoothness = smoothness
-    config.smoothing_spatial = smoothing_spatial
-    config.smoothing_color = smoothing_color
-    config.upscale_short_edge = upscale_short_edge
-    config.max_working_pixels = max_working_pixels
-    config.enable_subpixel_refine = enable_subpixel_refine
-    yield None
-
-    # Stage 2: core vectorization
-    result = nv.vectorize(image_file, config)
-    yield None
-
-    # Stage 3: render PNG preview
-    png_bytes = None
-    try:
-        png_bytes = render_svg_to_png_bytes(result.svg_content, result.width, result.height)
-    except Exception as e:
-        print(f"[Warning] Could not render SVG to PNG: {e}")
-    yield None
-
-    # Done
-    yield (
-        result.svg_content,
-        png_bytes,
-        image_file,
-    )
+# ── Vectorization ──────────────────────────────────────────────────────────
 
 
 def vectorize_image(
@@ -472,7 +445,7 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
         gr.Markdown('<p class="section-header">📤 上传图片</p>')
 
         # Preview area — single container with state-dependent content
-        with gr.Group():
+        with gr.Group(elem_classes=["preview-wrapper"]):
             # Primary upload/preview zone (gr.Image shows upload box when value=None)
             upload_zone = gr.Image(
                 label="",
@@ -513,38 +486,36 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
 
         # Preset selector — visible, defaults to 插画
         gr.Markdown('<p class="section-header">⚡ 预设</p>')
-        preset_choices = {
-            "照片 (📷 适合人像、风景)": "照片",
-            "插画 (🎨 适合动漫、游戏原画)": "插画",
-            "线稿 (✏️ 适合黑白线条、图标)": "线稿",
-        }
         preset_radio = gr.Radio(
-            choices=list(preset_choices.keys()),
-            value="插画 (🎨 适合动漫、游戏原画)",  # Default to 插画
+            choices=["照片", "插画", "线稿"],
+            value="插画",
             label="",
-            info="选择一个预设快速填充参数，或手动调整下方滑块",
+            info="📷 照片：人像/风景 | 🎨 插画：动漫/游戏原画 | ✏️ 线稿：黑白线条/图标",
             elem_id="preset-radio",
         )
 
-        # Vectorize button
-        vectorize_btn = gr.Button(
-            "✨ 矢量化",
-            variant="primary",
-            size="lg",
-        )
+        # Action area — vectorize button and download area share the same visual slot
+        with gr.Group():
+            # Vectorize button (visible in idle/uploaded/loading states)
+            vectorize_btn = gr.Button(
+                "✨ 请先上传图片",
+                variant="primary",
+                size="lg",
+                interactive=False,
+            )
 
-        # Download area — replaces vectorize button after completion
-        with gr.Group(visible=False) as download_area:
-            gr.Markdown("#### 💾 导出")
-            with gr.Row():
-                svg_download = gr.File(label="下载 SVG")
-                png_download = gr.File(label="下载 PNG")
-            with gr.Row():
-                copy_svg_btn = gr.Button(
-                    "📋 复制 SVG 源码",
-                    size="sm",
-                    elem_id="copy-svg-btn",
-                )
+            # Download area — replaces vectorize button after completion
+            with gr.Group(visible=False) as download_area:
+                gr.Markdown("#### 💾 导出")
+                with gr.Row():
+                    svg_download = gr.File(label="下载 SVG")
+                    png_download = gr.File(label="下载 PNG")
+                with gr.Row():
+                    copy_svg_btn = gr.Button(
+                        "📋 复制 SVG 源码",
+                        size="sm",
+                        elem_id="copy-svg-btn",
+                    )
 
     # Hidden SVG source for JS copy
     svg_source_hidden = gr.Textbox(
@@ -653,46 +624,55 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
 
     def on_upload(image_file):
         """Update file info and switch preview to 'uploaded' state."""
+        global _has_result
+        _has_result = False
         return (
             build_file_info_html(image_file),
             gr.update(visible=True),   # clear_btn
             gr.update(visible=False),   # loading_indicator
             gr.update(visible=False),   # result_display
-            gr.update(visible=True, interactive=True),   # vectorize_btn
+            gr.update(value="✨ 矢量化", visible=True, interactive=True),   # vectorize_btn
         )
 
 
     def on_clear():
         """Reset to idle state — show upload box, hide overlays."""
-        global _session_history
+        global _session_history, _has_result
         _session_history = []
+        _has_result = False
         return (
             None,                       # upload_zone value (None = show upload box)
             gr.update(visible=False),   # clear_btn
             gr.update(visible=False),   # loading_indicator
-            gr.update(visible=False),   # result_display
+            gr.update(visible=False, value=""),   # result_display — clear HTML too
             '<div style="color:#9090b0;font-size:12px;font-family:monospace;padding:4px 0;">未上传图片</div>',
             gr.update(visible=False),   # download_area
-            gr.update(visible=False, interactive=False),   # vectorize_btn
+            gr.update(value="✨ 请先上传图片", visible=True, interactive=False),   # vectorize_btn
+            None,                       # svg_download
+            None,                       # png_download
+            "",                          # svg_source_hidden
         )
 
 
-    def on_vectorize(
+    def on_vectorize_gen(
         image_file, num_colors, min_region_area, curve_fit_error,
         corner_angle_threshold, smoothness, smoothing_spatial,
         smoothing_color, upscale_short_edge, max_working_pixels,
         enable_subpixel_refine,
     ):
+        """Generator: first yield shows loading, second yield delivers result."""
         global _session_history
 
         if image_file is None:
             gr.Info("请先上传一张图片。")
-            return [gr.no_update()] * 10
+            yield [gr.no_update()] * 10
+            return
 
         file_size = Path(image_file).stat().st_size
         if file_size > 50 * 1024 * 1024:
             gr.Info(f"文件过大（{file_size / 1024 / 1024:.1f} MB）。限制为 50 MB。")
-            return [gr.no_update()] * 10
+            yield [gr.no_update()] * 10
+            return
 
         params = {
             "num_colors": num_colors,
@@ -707,62 +687,45 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
             "enable_subpixel_refine": enable_subpixel_refine,
         }
 
+        # --- Phase 1: Show loading ---
+        yield (
+            gr.update(visible=False),           # upload_zone
+            gr.update(visible=True),             # clear_btn
+            gr.update(visible=True),             # loading_indicator
+            gr.update(visible=False),            # result_display
+            build_file_info_html(image_file),    # file_info_output
+            gr.update(visible=False),            # download_area
+            None,                                # svg_download
+            None,                                # png_download
+            "",                                  # svg_source_hidden
+            gr.update(visible=False, interactive=False),  # vectorize_btn
+        )
+
+        # --- Phase 2: Execute vectorization ---
         try:
-            gen = vectorize_image_gen(
+            svg_content, png_bytes, original_image = vectorize_image(
                 image_file, num_colors, min_region_area, curve_fit_error,
                 corner_angle_threshold, smoothness, smoothing_spatial,
                 smoothing_color, upscale_short_edge, max_working_pixels,
                 enable_subpixel_refine,
             )
 
-            result = None
-            for step in gen:
-                if step is not None:
-                    result = step
+            # Save files to shared temp directory
+            tmpdir = _ensure_tmpdir()
 
-            if result is None:
-                raise RuntimeError("矢量化未返回结果")
-
-            (svg_content, png_bytes, original_image) = result
-
-            # Save PNG preview
             png_path = None
             if png_bytes is not None:
-                svg_png_tmpdir = Path(tempfile.gettempdir()) / "neroued-vectorizer"
-                svg_png_tmpdir.mkdir(exist_ok=True)
-                if not hasattr(on_vectorize, "_png_cleanup_done"):
-                    for f in svg_png_tmpdir.glob("*.png"):
-                        try:
-                            f.unlink()
-                        except OSError:
-                            pass
-                    on_vectorize._png_cleanup_done = True
-
                 png_tmp = tempfile.NamedTemporaryFile(
-                    mode='wb', suffix=".png", delete=False, dir=str(svg_png_tmpdir)
-                )
+                    mode='wb', suffix=".png", delete=False, dir=str(tmpdir))
                 png_tmp.write(png_bytes)
                 png_tmp.close()
                 png_path = png_tmp.name
 
-            # Save SVG
-            svg_tmpdir = Path(tempfile.gettempdir()) / "neroued-vectorizer"
-            svg_tmpdir.mkdir(exist_ok=True)
-            if not hasattr(on_vectorize, "_svg_cleanup_done"):
-                for f in svg_tmpdir.glob("*.svg"):
-                    try:
-                        f.unlink()
-                    except OSError:
-                        pass
-                on_vectorize._svg_cleanup_done = True
-
             with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".svg", delete=False, dir=str(svg_tmpdir)
-            ) as f:
+                mode="w", suffix=".svg", delete=False, dir=str(tmpdir)) as f:
                 f.write(svg_content)
                 svg_path = f.name
 
-            # Build result SVG HTML
             svg_data_uri = svg_to_data_uri(svg_content)
             result_html = (
                 f'<div style="display:flex;align-items:center;justify-content:center;'
@@ -772,26 +735,38 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
                 f'</div>'
             )
 
-            # History
             label = f"#{len(_session_history)+1} {num_colors}色"
             _session_history.append({"label": label, "params": params})
 
-            return (
-                gr.update(visible=False),          # upload_zone (hide)
-                gr.update(visible=True),            # clear_btn
-                gr.update(visible=False),          # loading_indicator
-                gr.update(visible=True, value=result_html),  # result_display
-                build_file_info_html(image_file),  # file_info_output
-                gr.update(visible=True),            # download_area
-                svg_path,                           # svg_download
-                png_path,                           # png_download
-                svg_content,                        # svg_source_hidden
-                gr.update(visible=False),           # vectorize_btn (hidden in result)
+            global _has_result
+            _has_result = True
+
+            # --- Phase 2 yield: Show result ---
+            yield (
+                gr.update(visible=False),                      # upload_zone
+                gr.update(visible=True),                        # clear_btn
+                gr.update(visible=False),                      # loading_indicator
+                gr.update(visible=True, value=result_html),    # result_display
+                build_file_info_html(image_file),              # file_info_output
+                gr.update(visible=True),                        # download_area
+                svg_path,                                       # svg_download
+                png_path,                                       # png_download
+                svg_content,                                    # svg_source_hidden
+                gr.update(visible=False),                      # vectorize_btn
             )
 
         except Exception as exc:
             gr.Warning(f"矢量化失败：{exc}")
-            return [gr.no_update()] * 10
+            yield (
+                gr.update(visible=True),            # upload_zone ← show again
+                gr.update(visible=True),             # clear_btn
+                gr.update(visible=False),            # loading_indicator
+                gr.update(visible=False),            # result_display
+                build_file_info_html(image_file),    # file_info_output
+                gr.update(visible=False),            # download_area
+                None, None, "",
+                gr.update(value="✨ 矢量化", visible=True, interactive=True),  # vectorize_btn ← re-enable
+            )
 
 
     def build_history_html() -> str:
@@ -800,9 +775,11 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
         if not _session_history:
             return '<div style="color:#9090b0;font-size:12px;padding:4px 0;">尚无历史记录</div>'
         items = []
-        for i, entry in enumerate(reversed(_session_history)):
+        for display_i, entry in enumerate(reversed(_session_history)):
+            # Map display index back to original index in _session_history
+            original_idx = len(_session_history) - 1 - display_i
             items.append(
-                f'<div class="history-item" onclick="loadHistory({i})" '
+                f'<div class="history-item" onclick="loadHistory({original_idx})" '
                 f'style="cursor:pointer;padding:6px 8px;margin-bottom:4px;'
                 f'background:#313147;border-radius:6px;font-size:12px;font-family:monospace;'
                 f'color:#e2e2f0;transition:background 0.15s;" '
@@ -814,13 +791,16 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
 
 
     def on_history_select(history_index: int):
-        """Load parameters from a history entry back into the sliders."""
-        global _session_history
+        """Load parameters from a history entry back into the sliders.
+
+        If a result is currently displayed, also reset to 'uploaded' state.
+        """
+        global _session_history, _has_result
         if history_index is None or history_index >= len(_session_history):
-            return [gr.no_update()] * 10
+            return [gr.no_update()] * 14
         entry = _session_history[history_index]
         p = entry["params"]
-        return [
+        param_updates = [
             gr.update(value=p["num_colors"]),
             gr.update(value=p["min_region_area"]),
             gr.update(value=p["curve_fit_error"]),
@@ -832,28 +812,43 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
             gr.update(value=p["max_working_pixels"]),
             gr.update(value=p["enable_subpixel_refine"]),
         ]
+        if _has_result:
+            _has_result = False
+            return param_updates + [
+                gr.update(visible=True),             # upload_zone
+                gr.update(visible=False),             # loading_indicator
+                gr.update(visible=False, value=""),   # result_display
+                gr.update(visible=False),             # download_area
+            ]
+        return param_updates + [gr.no_update()] * 4
 
 
     def on_preset_radio_change(preset_key: str | None):
-        """When user selects a preset from the Radio, update all parameter sliders."""
-        if preset_key is None:
-            return [gr.no_update()] * 10
-        if preset_key not in PRESETS:
-            return [gr.no_update()] * 10
+        """When user selects a preset from the Radio, update all parameter sliders.
+
+        If a vectorization result is currently displayed, also reset to 'uploaded'
+        state so the user knows they need to re-vectorize with the new preset.
+        """
+        if preset_key is None or preset_key not in PRESETS:
+            return [gr.no_update()] * 14
         vals = PRESETS[preset_key]["params"]
-        return [gr.update(value=v) for v in vals]
+        param_updates = [gr.update(value=v) for v in vals]
+
+        global _has_result
+        if _has_result:
+            _has_result = False
+            return param_updates + [
+                gr.update(visible=True),             # upload_zone (back to uploaded state)
+                gr.update(visible=False),             # loading_indicator
+                gr.update(visible=False, value=""),   # result_display
+                gr.update(visible=False),             # download_area
+            ]
+        return param_updates + [gr.no_update()] * 4
 
 
-    # Upload → file info + preview state
+    # Upload / paste → file info + preview state
+    # (upload event fires for drag-drop, browse, and paste in Gradio 4.x)
     upload_zone.upload(
-        on_upload,
-        inputs=[upload_zone],
-        outputs=[file_info_output, clear_btn, loading_indicator, result_display,
-                 vectorize_btn],
-    )
-
-    # Upload → also triggered on change (e.g. paste)
-    upload_zone.change(
         on_upload,
         inputs=[upload_zone],
         outputs=[file_info_output, clear_btn, loading_indicator, result_display,
@@ -864,12 +859,13 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
     clear_btn.click(
         on_clear,
         outputs=[upload_zone, clear_btn, loading_indicator, result_display,
-                 file_info_output, download_area, vectorize_btn],
+                 file_info_output, download_area, vectorize_btn,
+                 svg_download, png_download, svg_source_hidden],
     )
 
-    # Main vectorize event
+    # Main vectorize event — generator mode for loading state
     vectorize_btn.click(
-        on_vectorize,
+        on_vectorize_gen,
         inputs=[upload_zone, num_colors, min_region_area, curve_fit_error,
                 corner_angle_threshold, smoothness, smoothing_spatial,
                 smoothing_color, upscale_short_edge, max_working_pixels,
@@ -879,30 +875,31 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
             file_info_output, download_area,
             svg_download, png_download, svg_source_hidden, vectorize_btn,
         ],
-        show_progress="minimal",
     ).then(
         fn=build_history_html,
         inputs=None,
         outputs=[history_output],
     )
 
-    # Preset radio → update all sliders
+    # Preset radio → update all sliders (+ reset from result state if needed)
     preset_radio.change(
         fn=on_preset_radio_change,
         inputs=[preset_radio],
         outputs=[num_colors, min_region_area, curve_fit_error,
-                  corner_angle_threshold, smoothness, smoothing_spatial,
-                  smoothing_color, upscale_short_edge, max_working_pixels,
-                  enable_subpixel_refine],
+                 corner_angle_threshold, smoothness, smoothing_spatial,
+                 smoothing_color, upscale_short_edge, max_working_pixels,
+                 enable_subpixel_refine,
+                 upload_zone, loading_indicator, result_display, download_area],
     )
 
     # Hidden index carrier for history selection
-    history_index_input = gr.Number(visible=False, value=None, container=False)
+    history_index_input = gr.Number(visible=False, value=None, container=False,
+                                     elem_id="history-index-input")
 
     def on_history_index_change(index):
         """Triggered when JS writes the selected history index to the hidden field."""
         if index is None:
-            return [gr.no_update()] * 10
+            return [gr.no_update()] * 14
         return on_history_select(int(index))
 
     history_index_input.change(
@@ -911,7 +908,8 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
         outputs=[num_colors, min_region_area, curve_fit_error,
                  corner_angle_threshold, smoothness, smoothing_spatial,
                  smoothing_color, upscale_short_edge, max_working_pixels,
-                 enable_subpixel_refine],
+                 enable_subpixel_refine,
+                 upload_zone, loading_indicator, result_display, download_area],
         queue=False,
     )
 
@@ -919,17 +917,21 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
     history_js = """
     <script>
     function loadHistory(idx) {
-        var inp = document.querySelector('input[type="number"][aria-label=""]');
-        if (!inp) return;
-        var allInputs = document.querySelectorAll('input[type="number"]');
-        for (var i = 0; i < allInputs.length; i++) {
-            if (allInputs[i].offsetParent === null || allInputs[i].style.display === 'none') {
-                allInputs[i].value = idx;
-                allInputs[i].dispatchEvent(new Event('input', {bubbles: true}));
-                allInputs[i].dispatchEvent(new Event('change', {bubbles: true}));
-                break;
+        var inp = document.getElementById('history-index-input');
+        if (!inp) {
+            // Fallback: find hidden number input by style
+            var allInputs = document.querySelectorAll('input[type="number"]');
+            for (var i = 0; i < allInputs.length; i++) {
+                if (allInputs[i].offsetParent === null || allInputs[i].style.display === 'none') {
+                    inp = allInputs[i];
+                    break;
+                }
             }
         }
+        if (!inp) return;
+        inp.value = idx;
+        inp.dispatchEvent(new Event('input', {bubbles: true}));
+        inp.dispatchEvent(new Event('change', {bubbles: true}));
     }
     </script>
     """
