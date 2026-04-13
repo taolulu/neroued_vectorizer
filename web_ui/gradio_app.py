@@ -647,7 +647,7 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
         _session_history = []
         _has_result = False
         return (
-            None,                       # upload_zone value (None = show upload box)
+            gr.update(value=None, visible=True),  # upload_zone — reset & show upload box
             gr.update(visible=False),   # clear_btn
             gr.update(visible=False),   # loading_indicator
             gr.update(visible=False, value=""),   # result_display — clear HTML too
@@ -693,9 +693,9 @@ with gr.Blocks(title=BLOCK_TITLE) as demo:
             "enable_subpixel_refine": enable_subpixel_refine,
         }
 
-        # --- Phase 1: Show loading ---
+        # --- Phase 1: Show loading (keep upload_zone visible, overlay covers it) ---
         yield (
-            gr.update(visible=False),           # upload_zone
+            gr.update(visible=True),            # upload_zone — stay visible, loading overlay on top
             gr.update(visible=True),             # clear_btn
             gr.update(visible=True),             # loading_indicator
             gr.update(visible=False),            # result_display
